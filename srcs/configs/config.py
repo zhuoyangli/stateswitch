@@ -1,0 +1,28 @@
+"""
+Shared configuration for stateswitch project
+"""
+from pathlib import Path
+import os
+
+# Get username
+USERNAME = os.getenv('USER', 'unknown')
+
+# Project root
+PROJECT_ROOT = Path(__file__).parent.parent
+
+# Detect environment by checking paths
+if Path('/scratch4').exists(): # rockfish/ARCH
+    PROJECT_ROOT = Path(f"/scratch4/choney1/zli230/stateswitch")
+    DATA_DIR = PROJECT_ROOT / "data"
+    RAW_DIR = DATA_DIR / "raw"
+    BIDS_DIR = DATA_DIR / "bids"
+elif Path('/Users/gioli').exists(): # local mac
+    PROJECT_ROOT = Path(f"/Users/gioli/projects/stateswitch")
+    DATA_DIR = PROJECT_ROOT / "data"
+    RAW_DIR = DATA_DIR / "raw"
+    BIDS_DIR = DATA_DIR / "bids"
+elif Path('/home/zli230').exists(): # lab server
+    PROJECT_ROOT = Path(f"/home/zli230/projects/stateswitch")
+    DATA_DIR = PROJECT_ROOT / "data"
+    RAW_DIR = Path(f"/mri_transfer/gio/stateswitch")
+    BIDS_DIR = DATA_DIR / "bids"
