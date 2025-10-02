@@ -4,7 +4,6 @@
 #SBATCH --partition=parallel
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=48
-#SBATCH --account=choney1
 #SBATCH --output=/scratch4/choney1/zli230/stateswitch/data/logs/fmriprep_%j.out
 #SBATCH --error=/scratch4/choney1/zli230/stateswitch/data/logs/fmriprep_%j.err
 #SBATCH --mail-type=END,FAIL
