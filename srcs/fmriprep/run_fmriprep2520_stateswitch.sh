@@ -16,28 +16,15 @@ WORK_DIR="/scratch4/choney1/zli230/stateswitch/work"
 FMRIPREP_IMG="/scratch4/choney1/zli230/containers/fmriprep-25.2.0.sif"
 FS_LICENSE="/vast/jchen230/containers/license.txt"
 
-# Participant and session to process
+# Participant to process
 PARTICIPANT_NUM=$1
-SESSION_NUM=$2
 PARTICIPANT=$(printf "%03d" ${PARTICIPANT_NUM})
-SESSION=$(printf "%02d" ${SESSION_NUM})
 
-echo "Starting fMRIPrep for sub-${PARTICIPANT}_ses-${SESSION}"
+echo "Starting fMRIPrep for sub-${PARTICIPANT}"
 
 # Create work and derivatives directory if they don't exist
 mkdir -p ${OUTPUT_DIR}
 mkdir -p ${WORK_DIR}
-
-# Add this before running fMRIPrep
-# # Copy T1w from ses-01 to current session
-# ANAT_DIR="${BIDS_DIR}/sub-${PARTICIPANT}/ses-${SESSION}/anat"
-# mkdir -p ${ANAT_DIR}
-
-# # Copy the T1w file
-# cp ${BIDS_DIR}/sub-${PARTICIPANT}/ses-01/anat/sub-${PARTICIPANT}_ses-01_T1w.nii.gz \
-#    ${ANAT_DIR}/sub-${PARTICIPANT}_ses-${SESSION}_T1w.nii.gz
-
-# echo "Copied T1w from ses-01 to ses-${SESSION}"
 
 # Run fMRIPrep
 singularity run --cleanenv \
@@ -50,7 +37,6 @@ singularity run --cleanenv \
   --skip-bids-validation \
   --ignore slicetiming \
   --participant-label ${PARTICIPANT} \
-  --session-label ${SESSION} \
   --work-dir ${WORK_DIR} \
   --fs-license-file ${FS_LICENSE} \
   --output-spaces anat MNI152NLin2009cAsym MNI152NLin6Asym:res-2 fsaverage6 \
@@ -63,4 +49,4 @@ singularity run --cleanenv \
   --write-graph \
   --bold2anat-dof 6
 
-echo "fMRIPrep completed for sub-${PARTICIPANT}_ses-${SESSION}"
+echo "fMRIPrep completed for sub-${PARTICIPANT}"
