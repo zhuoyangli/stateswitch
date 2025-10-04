@@ -1,5 +1,6 @@
 data/
 work/
+figs/
 __pycache__/
 *.pyc
 .DS_Store
