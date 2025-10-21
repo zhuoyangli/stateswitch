@@ -9,7 +9,7 @@ PLOT_PARAMS = {
     'bg_on_data': True,
     'colorbar': False,
     'vmax': 7.3,
-    'symmetric_cmap': True
+    # 'symmetric_cmap': True
 }
 
 # Figure parameters

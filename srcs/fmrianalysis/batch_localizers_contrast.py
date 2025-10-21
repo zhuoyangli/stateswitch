@@ -29,22 +29,30 @@ def generate_jobs():
     """Generate analysis jobs based on subject-specific patterns"""
     jobs = []
     
-    # Standard pattern: all tasks in ses-04
-    for subject in ['sub-001', 'sub-008']:
-        for task in ['langloc', 'mdloc', 'tomloc']:
-            for run in [1, 2]:
-                jobs.append((subject, 'ses-04', task, run))
+    # # Standard pattern: all tasks in ses-04
+    # for subject in ['sub-001', 'sub-006', 'sub-008', 'sub-009']:
+    #     for task in ['langloc', 'mdloc', 'tomloc']:
+    #         for run in [1, 2]:
+    #             jobs.append((subject, 'ses-04', task, run))
     
     # # Special case: sub-003
-    # # mdloc in ses-04
+    # # langloc in ses-05
     # for run in [1, 2]:
-    #     jobs.append(('sub-003', 'ses-04', 'mdloc', run))
-    
-    # # other tasks in ses-05
-    # for task in ['langloc', 'tomloc']:
+    #     jobs.append(('sub-003', 'ses-05', 'langloc', run))
+    # # other tasks in ses-08
+    # for task in ['mdloc', 'tomloc']:
     #     for run in [1, 2]:
-    #         jobs.append(('sub-003', 'ses-05', task, run))
-    
+    #         jobs.append(('sub-003', 'ses-08', task, run))
+
+    # Special case: sub-004
+    # langloc in ses-06
+    for run in [1, 2]:
+        jobs.append(('sub-004', 'ses-06', 'langloc', run))
+    # other tasks in ses-05
+    for task in ['mdloc', 'tomloc']:
+        for run in [1, 2]:
+            jobs.append(('sub-004', 'ses-05', task, run))
+
     return jobs
 
 def run_analysis(subject, session, task, run):

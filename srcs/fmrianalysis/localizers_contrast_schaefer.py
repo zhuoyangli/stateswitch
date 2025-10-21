@@ -55,7 +55,7 @@ def extract_roi_time_series(bold_path, n_rois=400, yeo_networks=17):
     
     # Remove background label (first entry)
     roi_labels = schaefer_atlas['labels'][1:]  # Skip background
-    
+    print(len(schaefer_atlas['labels']))
     return time_series, roi_labels, schaefer_atlas
 
 
@@ -91,7 +91,7 @@ def run_glm_analysis(time_series, events_df, contrast):
     return t_values, p_values, design_matrix
 
 
-def create_surface_plots(t_values, p_values, schaefer_atlas):
+def create_surface_plots(t_values, p_values, schaefer_atlas, subject_id, session_id, task, run):
     """Create surface plots with FDR correction"""
     # Load the atlas image from the file path
     atlas_img = nib.load(schaefer_atlas.maps)
@@ -128,7 +128,7 @@ def create_surface_plots(t_values, p_values, schaefer_atlas):
 
     # Create 1x4 subplot figure with adjusted spacing
     fig, axes = plt.subplots(1, 4, figsize=(20, 5), subplot_kw={'projection': '3d'})
-    fig.suptitle(f'T-values thresholded at FDR q < 0.05 (|t| > {t_threshold_fdr:.2f})', fontsize=16)
+    fig.suptitle(f'{subject_id}_{session_id}_{task}_run-{run}: T-values thresholded at FDR q < 0.05 (|t| > {t_threshold_fdr:.2f})', fontsize=16)
 
     # Left lateral
     plotting.plot_surf_stat_map(
@@ -214,7 +214,7 @@ def main(subject_id, session_id, task, run_num):
     print(f"Significant ROIs: {sig_rois}")
     
     # Create surface plots
-    fig = create_surface_plots(t_values, p_values, schaefer_atlas)
+    fig = create_surface_plots(t_values, p_values, schaefer_atlas, subject_id, session_id, task, run_num)
     
     # Save figure
     output_dir = FIGS_DIR / task
