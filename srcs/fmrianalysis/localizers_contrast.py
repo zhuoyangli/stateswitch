@@ -67,15 +67,20 @@ def generate_events_dataframe(task, run_num):
         events = []
         current_time = 15.0 # Skip initial fixation
         
-        for loop_conditions in conditions:
-            for is_hard in loop_conditions:
+        for iloop, loop_conditions in enumerate(conditions):
+            for itrial, is_hard in enumerate(loop_conditions):
                 condition = 'hard' if is_hard else 'easy'
+                
+                if run_num == 1 and iloop == 0 and itrial == 0:
+                    duration = 5.0
+                else:
+                    duration = 9.0
                 events.append({
                     'onset': current_time,
-                    'duration': 9.0,
+                    'duration': duration,
                     'trial_type': condition
                 })
-                current_time += 9.0
+                current_time += duration
             current_time += 15.0 # Inter-loop fixation
         
         return pd.DataFrame(events), contrast
@@ -98,7 +103,7 @@ def generate_events_dataframe(task, run_num):
                 'trial_type': condition
             })
             current_time += 16.5
-        current_time += 12.0 # Inter-trial interval (fixation)
+            current_time += 12.0 # Inter-trial interval (fixation)
 
         return pd.DataFrame(events), contrast
 

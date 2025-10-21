@@ -7,6 +7,94 @@ from pathlib import Path
 import pandas as pd
 from nilearn.surface import load_surf_data
 
+
+## Localizers functions
+def generate_events_dataframe(task, run_num):
+    """Generate events for specified task and run"""
+    if task == 'langloc':
+        contrast = 'intact - degraded'
+        conditions_run1 = [[1, 0, 0, 1],
+                           [0, 1, 0, 1],
+                           [1, 0, 1, 0],
+                           [0, 1, 1, 0]]
+        
+        conditions_run2 = [[0, 1, 1, 0],
+                           [1, 0, 1, 0],
+                           [0, 1, 0, 1],
+                           [1, 0, 0, 1]]
+        
+        conditions = conditions_run1 if run_num == 1 else conditions_run2
+        
+        events = []
+        current_time = 15.0  # Skip initial fixation
+        
+        for loop_conditions in conditions:
+            for is_intact in loop_conditions:
+                condition = 'intact' if is_intact else 'degraded'
+                events.append({
+                    'onset': current_time,
+                    'duration': 18.0,
+                    'trial_type': condition
+                })
+                current_time += 18.0
+            current_time += 15.0  # Inter-loop fixation
+
+        return pd.DataFrame(events), contrast
+
+    elif task == 'mdloc':
+        contrast = 'hard - easy'
+        conditions_run1 = [[1, 0, 0, 1],
+                           [0, 1, 0, 1],
+                           [1, 0, 1, 0],
+                           [0, 1, 1, 0]]
+        
+        conditions_run2 = [[0, 1, 1, 0],
+                           [1, 0, 1, 0],
+                           [0, 1, 0, 1],
+                           [1, 0, 0, 1]]
+        
+        conditions = conditions_run1 if run_num == 1 else conditions_run2
+        
+        events = []
+        current_time = 15.0 # Skip initial fixation
+        
+        for iloop, loop_conditions in enumerate(conditions):
+            for itrial, is_hard in enumerate(loop_conditions):
+                condition = 'hard' if is_hard else 'easy'
+                
+                duration = 9.0
+                events.append({
+                    'onset': current_time,
+                    'duration': duration,
+                    'trial_type': condition
+                })
+                current_time += duration
+            current_time += 15.0 # Inter-loop fixation
+        
+        return pd.DataFrame(events), contrast
+    
+    elif task == 'tomloc':
+        contrast = 'belief - photo'
+        conditions_run1 = [1, 0, 0, 1, 0, 1, 0, 1, 1, 0]
+        conditions_run2 = [0, 1, 0, 1, 1, 0, 0, 1, 0, 1]
+
+        conditions = conditions_run1 if run_num == 1 else conditions_run2
+
+        events = []
+        current_time = 12.0 # Skip initial fixation
+
+        for is_belief in conditions:
+            condition = 'belief' if is_belief else 'photo'
+            events.append({
+                'onset': current_time,
+                'duration': 16.5,
+                'trial_type': condition
+            })
+            current_time += 16.5
+            current_time += 12 # Response + Inter-trial fixation
+
+        return pd.DataFrame(events), contrast
+
 def load_surface_data(subject, session, task, hemi, data_dir, fsaverage='fsaverage6'):
     """
     Load fMRIPrep surface data for a subject
