@@ -241,13 +241,6 @@ class MinimalBIDSConverter:
             
             matched = False
             
-            # Skip files that are already processed tasks
-            skip_tasks = ['langloc', 'mdloc', 'tomloc', 'sceneprf']
-            if any(f'fmri_{task}' in file.name.lower() for task in skip_tasks):
-                self.processed_files.add(file)
-                logger.info(f"    Skipping already processed task: {file.name}")
-                continue
-            
             # First try custom patterns for this subject/session
             if custom_func_patterns:
                 for task, patterns in custom_func_patterns.items():

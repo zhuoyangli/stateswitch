@@ -14,8 +14,7 @@ TOTAL_READOUT_TIME = 0.0768
 EFFECTIVE_ECHO_SPACING = 0.00069
 
 # Processing settings
-# TASK_NAMES = ["langloc1", "langloc2", "mdloc1", "mdloc2", "tomloc1", "tomloc2", "sceneprf"] 
-TASK_NAMES = ["fta", "ahc", "svf", "tst"]
+TASK_NAMES = ["langloc1", "langloc2", "mdloc1", "mdloc2", "tomloc1", "tomloc2", "sceneprf", "fta", "ahc", "svf", "tst"]
 PROCESS_ANAT = True
 PROCESS_FMAP = True
 
@@ -95,6 +94,14 @@ CUSTOM_FUNCTIONAL_FILENAME_MAPPINGS = {
         'svf': ['task3'],
         'sb': ['task4']
     },
+    ('004', '06'): {
+        'adollshouse': ['stories_11'],
+        'adventuresinsayingyes': ['stories_12'],
+        'buck': ['stories_13'],
+        'inamoment': ['stories_14'],
+        'theclosetthatateeverything': ['stories_15'],
+        'wheretheressmoke': ['stories_16']
+    },
     ('006', '01'): {
         'treasureisland': ['stories_5'],
         'undertheinfluence': ['stories_6'],
@@ -127,7 +134,7 @@ CUSTOM_FUNCTIONAL_FILENAME_MAPPINGS = {
         'penpal': ['sub7_12'],
         'odetostepfather': ['sub7_13'],
         'swimming': ['sub7_14'],
-        'howtodraw': ['sub7_15']
+        'howtodraw': ['sub07_15']
     },
     ('007', '02'): {
         'audloc': ['local_5'],
