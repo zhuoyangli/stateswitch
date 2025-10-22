@@ -223,45 +223,55 @@ class MinimalBIDSConverter:
         ses_num = f"{int(ses_id):02d}"
         custom_func_patterns = self.custom_functional_mappings.get((sub_num, ses_num), {})
         
-        # Get all task names to look for
-        if custom_func_patterns:
-            # If custom patterns exist, use those task names
-            all_tasks = list(custom_func_patterns.keys())
-        else:
-            # Otherwise use the standard task names
-            all_tasks = self.task_names
+        # Track runs for each task - start with standard tasks
+        task_runs = {task: [] for task in self.task_names}
         
-        # Track runs for each task
-        task_runs = {task: [] for task in all_tasks}
+        # Add any custom tasks that aren't in standard list
+        if custom_func_patterns:
+            for task in custom_func_patterns.keys():
+                if task not in task_runs:
+                    task_runs[task] = []
         
         # Find all potential functional files
         for file in sorted(session_path.iterdir()):
             if not file.suffix == '.gz':
                 continue
             
-            matched = False
-            
-            # First try custom patterns for this subject/session
+            # Check custom patterns
             if custom_func_patterns:
                 for task, patterns in custom_func_patterns.items():
                     if any(pattern in file.name for pattern in patterns):
                         task_runs[task].append(file)
                         self.processed_files.add(file)
-                        matched = True
                         logger.info(f"    Matched {file.name} to task '{task}' using custom pattern")
-                        break
+                        # Don't break - file might match multiple patterns
             
-            # If no custom match, try standard patterns
-            if not matched:
-                for task in self.task_names:
-                    if f'fmri_{task}' in file.name.lower():
+            # Also check standard patterns
+            for task in self.task_names:
+                if f'fmri_{task}' in file.name.lower():
+                    # Only add if not already added by custom pattern
+                    if file not in task_runs[task]:
                         task_runs[task].append(file)
                         self.processed_files.add(file)
-                        matched = True
-                        break
+                        logger.info(f"    Matched {file.name} to task '{task}' using standard pattern")
+            
+            # Also check for any other fmri_ patterns not in our task list
+            if 'fmri_' in file.name.lower():
+                match = re.search(r'fmri_([a-zA-Z0-9]+)', file.name.lower())
+                if match:
+                    task_name = match.group(1)
+                    if task_name not in task_runs:
+                        task_runs[task_name] = []
+                    if file not in task_runs[task_name]:
+                        task_runs[task_name].append(file)
+                        self.processed_files.add(file)
+                        logger.info(f"    Found new task '{task_name}' in {file.name}")
         
         # Process each task
         for task, files in task_runs.items():
+            if not files:  # Skip tasks with no files
+                continue
+                
             for run_idx, file in enumerate(files, 1):
                 # Create BIDS filename
                 if len(files) > 1:
