@@ -219,8 +219,8 @@ class MinimalBIDSConverter:
     def process_functional_files(self, sub_id: str, ses_id: str, session_path: Path, func_dir: Path):
         """Process functional MRI files with custom filename support"""
         # Get custom mappings if they exist
-        sub_num = sub_id.lstrip('0')
-        ses_num = ses_id.lstrip('0')
+        sub_num = f"{int(sub_id):03d}"
+        ses_num = f"{int(ses_id):02d}"
         custom_func_patterns = self.custom_functional_mappings.get((sub_num, ses_num), {})
         
         # Get all task names to look for
@@ -313,8 +313,8 @@ class MinimalBIDSConverter:
         import re
         
         # Get custom patterns if they exist
-        sub_num = sub_id.lstrip('0')
-        ses_num = ses_id.lstrip('0')
+        sub_num = f"{int(sub_id):03d}"
+        ses_num = f"{int(ses_id):02d}"
         custom_fmap_patterns = self.custom_fieldmap_mappings.get((sub_num, ses_num), {})
         
         # Look for fieldmap files
@@ -433,8 +433,8 @@ class MinimalBIDSConverter:
         json_path = nifti_path.with_suffix('').with_suffix('.json')
         
         # Extract numbers for config lookup
-        sub_num = sub_id.lstrip('0')
-        ses_num = ses_id.lstrip('0')
+        sub_num = f"{int(sub_id):03d}"
+        ses_num = f"{int(ses_id):02d}"
         
         # Parse acquisition label from filename
         acq_match = re.search(r'acq-(\d+)', nifti_path.name)
