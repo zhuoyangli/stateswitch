@@ -243,29 +243,14 @@ class MinimalBIDSConverter:
                     if any(pattern in file.name for pattern in patterns):
                         task_runs[task].append(file)
                         self.processed_files.add(file)
-                        logger.info(f"    Matched {file.name} to task '{task}' using custom pattern")
-                        # Don't break - file might match multiple patterns
+                        break
             
             # Also check standard patterns
             for task in self.task_names:
                 if f'fmri_{task}' in file.name.lower():
-                    # Only add if not already added by custom pattern
                     if file not in task_runs[task]:
                         task_runs[task].append(file)
                         self.processed_files.add(file)
-                        logger.info(f"    Matched {file.name} to task '{task}' using standard pattern")
-            
-            # Also check for any other fmri_ patterns not in our task list
-            if 'fmri_' in file.name.lower():
-                match = re.search(r'fmri_([a-zA-Z0-9]+)', file.name.lower())
-                if match:
-                    task_name = match.group(1)
-                    if task_name not in task_runs:
-                        task_runs[task_name] = []
-                    if file not in task_runs[task_name]:
-                        task_runs[task_name].append(file)
-                        self.processed_files.add(file)
-                        logger.info(f"    Found new task '{task_name}' in {file.name}")
         
         # Process each task
         for task, files in task_runs.items():
