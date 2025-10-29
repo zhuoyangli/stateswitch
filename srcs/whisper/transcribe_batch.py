@@ -81,19 +81,6 @@ def save_transcript(result: Dict[str, Any], session_path: Path, base_name: str) 
     with open(transcript_path, 'w', encoding='utf-8') as f:
         f.write(result["text"].strip())
     
-    # Save word-level timestamps as CSV
-    if "words" in result:
-        csv_path = session_path / f"{base_name}_word_timestamps.csv"
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['word', 'start', 'end'])
-            writer.writeheader()
-            for word_info in result["words"]:
-                writer.writerow({
-                    'word': word_info['word'].strip(),
-                    'start': word_info['start'],
-                    'end': word_info['end']
-                })
-    
     # Save full result as JSON for complete information
     json_path = session_path / f"{base_name}_full.json"
     with open(json_path, 'w', encoding='utf-8') as f:
