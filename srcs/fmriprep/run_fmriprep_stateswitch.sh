@@ -4,6 +4,8 @@
 #SBATCH --partition=parallel
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=48
+#SBATCH --account=choney1_gpu
+#SBATCH --qos=normal
 #SBATCH --output=/scratch4/choney1/zli230/stateswitch/data/logs/fmriprep_%j.out
 #SBATCH --error=/scratch4/choney1/zli230/stateswitch/data/logs/fmriprep_%j.err
 #SBATCH --mail-type=END,FAIL
@@ -13,7 +15,7 @@
 BIDS_DIR="/scratch4/choney1/zli230/stateswitch/data/bids"
 OUTPUT_DIR="/scratch4/choney1/zli230/stateswitch/data/derivatives"
 WORK_DIR="/scratch4/choney1/zli230/stateswitch/work"
-FMRIPREP_IMG="/scratch4/choney1/zli230/containers/fmriprep-25.2.0.sif"
+FMRIPREP_IMG="/scratch4/choney1/zli230/containers/fmriprep-25.2.3.sif"
 FS_LICENSE="/vast/jchen230/containers/license.txt"
 
 # Participant to process
@@ -39,7 +41,7 @@ singularity run --cleanenv \
   --participant-label ${PARTICIPANT} \
   --work-dir ${WORK_DIR} \
   --fs-license-file ${FS_LICENSE} \
-  --output-spaces anat MNI152NLin2009cAsym MNI152NLin6Asym:res-2 fsaverage6 \
+  --output-spaces anat MNI152NLin2009cAsym MNI152NLin6Asym:res-2 fsnative fsaverage6 \
   --stop-on-first-crash \
   --nthreads 48 --omp-nthreads 4 \
   --notrack \

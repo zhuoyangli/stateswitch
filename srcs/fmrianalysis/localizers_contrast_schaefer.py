@@ -56,6 +56,7 @@ def extract_roi_time_series(bold_path, n_rois=400, yeo_networks=17):
     # Remove background label (first entry)
     roi_labels = schaefer_atlas['labels'][1:]  # Skip background
     print(len(schaefer_atlas['labels']))
+    
     return time_series, roi_labels, schaefer_atlas
 
 
