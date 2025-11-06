@@ -82,7 +82,7 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: /scratch4/choney1/zli230/stateswitch/data/bids [--dry-run]")
+        print("Usage: <bids_dir> [--dry-run]")
         sys.exit(1)
     
     bids_dir = Path(sys.argv[1])
