@@ -1,6 +1,14 @@
 #!/bin/bash
 # run_fmriprep_stateswitch_halibut.sh
-# Usage: ./run_fmriprep_stateswitch_halibut.sh <participant_number>
+# Usage:
+# 1. Open a tmux session:
+#   tmux new -s fmriprep_xxx
+# 2. Run the script with participant number as argument:
+#   ./run_fmriprep_stateswitch_halibut.sh <participant_number>
+# 3. Detach from tmux session:
+#   Press Ctrl+b then d
+# 4. Reattach to tmux session later:
+#   tmux attach -t fmriprep_xxx
 
 # Set up paths
 BIDS_DIR="/home/Datasets/stateswitch/bids"
