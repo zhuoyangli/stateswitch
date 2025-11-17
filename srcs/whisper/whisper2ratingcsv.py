@@ -55,7 +55,10 @@ def convert_whisper_to_rating_csv(json_path, output_path=None):
     
     # Determine output path
     if output_path is None:
-        output_path = json_path.parent / json_path.name.replace('desc-audio_full.json', 'desc-wordtimestamps.csv')
+        if 'desc-audio_full.json' in json_path.name:
+            output_path = json_path.parent / json_path.name.replace('desc-audio_full.json', 'desc-wordtimestamps.csv')
+        else:
+            output_path = json_path.with_suffix('.csv')
     
     # Save to CSV
     df.to_csv(output_path, index=False)
