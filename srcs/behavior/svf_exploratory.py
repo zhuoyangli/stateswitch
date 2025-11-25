@@ -10,189 +10,209 @@ outdir.mkdir(exist_ok=True)
 
 LONG_IRT_THRESHOLD = 20.0
 
+# === CONFIGURATION ===
+PERI_SWITCH_WINDOW = 3  # Look at -6 to +6
+MIN_SAMPLES_FOR_PLOT = 1  # Show point even if we only have 1 instance
+
 for fp in sorted(annotations_dir.glob("*.csv")):
-    # Extract subject and session info from filename
+    # Extract subject and session info
     parts = fp.stem.split("_")
     subject = parts[0] if len(parts) > 0 else "NA"
     session = parts[1] if len(parts) > 1 else "NA"
 
-    # Load CSV and immediately convert to NumPy arrays
+    # Load CSV
     df = pd.read_csv(fp)
     
     # === CONVERT TO NUMPY ARRAYS ===
-    # Extract all columns as separate numpy arrays
     transcriptions = df["transcription"].to_numpy()
     starts = pd.to_numeric(df["start"], errors="coerce").to_numpy()
     ends = pd.to_numeric(df["end"], errors="coerce").to_numpy()
     switch_flags = pd.to_numeric(df["switch_flag"], errors="coerce").fillna(0).astype(int).to_numpy()
     
     # === IDENTIFY CATEGORY BLOCKS ===
-    # Find where "next" appears (case-insensitive)
     is_next = np.char.lower(transcriptions.astype(str)) == "next"
-    # Create category IDs by cumulative sum of "next" occurrences
     cat_ids = np.cumsum(is_next)
     
-    # === COMPUTE IRTs USING NUMPY ===
+    # === COMPUTE IRTs ===
     n_items = len(transcriptions)
-    irts = np.full(n_items, np.nan)  # Initialize IRT array with NaN
-    prev_words = np.empty(n_items, dtype=object)  # Store previous words
+    irts = np.full(n_items, np.nan)
     
-    # Process each category block
     unique_cats = np.unique(cat_ids)
     for cat in unique_cats:
-        # Get indices for this category
         cat_mask = (cat_ids == cat)
         cat_indices = np.where(cat_mask)[0]
         
-        # Calculate IRTs within this category
         for i in range(1, len(cat_indices)):
             prev_idx = cat_indices[i - 1]
             curr_idx = cat_indices[i]
             
-            # Skip if either is "next"
             if is_next[prev_idx] or is_next[curr_idx]:
                 continue
             
-            # Calculate IRT
             if not np.isnan(starts[curr_idx]) and not np.isnan(ends[prev_idx]):
                 irts[curr_idx] = starts[curr_idx] - ends[prev_idx]
-                prev_words[curr_idx] = transcriptions[prev_idx]
     
-    # === REMOVE "NEXT" ENTRIES ===
-    # Create mask for actual words (not "next")
+    # === FILTER ARRAYS ===
     word_mask = ~is_next
-    
-    # Filter arrays to keep only actual words
     transcriptions_filtered = transcriptions[word_mask]
     irts_filtered = irts[word_mask]
     switch_flags_filtered = switch_flags[word_mask]
     cat_ids_filtered = cat_ids[word_mask]
-    prev_words_filtered = prev_words[word_mask]
     
-    # Clip negative IRTs to 0
     irts_filtered = np.clip(irts_filtered, 0, None)
+
+    # === 1. CLUSTER SIZES ===
+    cluster_sizes = []
+    for cat in np.unique(cat_ids_filtered):
+        cat_mask = cat_ids_filtered == cat
+        cat_switches = switch_flags_filtered[cat_mask]
+        
+        if len(cat_switches) == 0:
+            continue
+            
+        temp_switches = cat_switches.copy()
+        temp_switches[0] = 1 
+        switch_indices = np.where(temp_switches == 1)[0]
+        boundaries = np.concatenate([switch_indices, [len(cat_switches)]])
+        lengths = np.diff(boundaries)
+        cluster_sizes.extend(lengths)
+        
+    cluster_sizes = np.array(cluster_sizes)
+
+    # === 2. PERI-SWITCH IRTS ===
+    offsets = np.arange(-PERI_SWITCH_WINDOW, PERI_SWITCH_WINDOW + 1)
+    peri_switch_data = {k: [] for k in offsets}
     
-    # === FLAG LONG IRTs ===
-    long_irt_mask = irts_filtered > LONG_IRT_THRESHOLD
-    if np.any(long_irt_mask):
-        print(f"\n{subject} {session}: Long IRTs (> {LONG_IRT_THRESHOLD:.1f}s)")
-        long_indices = np.where(long_irt_mask)[0]
-        for idx in long_indices:
-            print(f"  {prev_words_filtered[idx]!r} → {transcriptions_filtered[idx]!r} | "
-                  f"cat={cat_ids_filtered[idx]} | switch={switch_flags_filtered[idx]} | "
-                  f"IRT={irts_filtered[idx]:.2f}s")
+    global_switch_indices = np.where(switch_flags_filtered == 1)[0]
     
-    # === SEPARATE IRTs BY SWITCH TYPE ===
-    # Use boolean indexing to separate cluster and switch IRTs
+    for idx in global_switch_indices:
+        current_cat = cat_ids_filtered[idx]
+        
+        for k in offsets:
+            target_idx = idx + k
+            
+            if target_idx < 0 or target_idx >= len(irts_filtered):
+                continue
+            
+            if cat_ids_filtered[target_idx] != current_cat:
+                continue
+            
+            is_valid_sequence = True
+            if k < 0:
+                intervening = switch_flags_filtered[target_idx+1 : idx]
+                if np.any(intervening == 1):
+                    is_valid_sequence = False
+            elif k > 0:
+                intervening = switch_flags_filtered[idx+1 : target_idx+1]
+                if np.any(intervening == 1):
+                    is_valid_sequence = False
+            
+            if is_valid_sequence:
+                val = irts_filtered[target_idx]
+                if not np.isnan(val):
+                    peri_switch_data[k].append(val)
+
+    # === PREPARE STATS FOR HEADER & PLOTS ===
     cluster_mask = switch_flags_filtered == 0
     switch_mask = switch_flags_filtered == 1
     
+    # Get raw counts (including those that might have NaN IRTs, though rare)
+    n_total = len(transcriptions_filtered)
+    n_cluster_count = np.sum(cluster_mask)
+    n_switch_count = np.sum(switch_mask)
+    n_cats = len(np.unique(cat_ids_filtered))
+    
+    # Get IRT data for plotting (removing NaNs)
     cluster_irts = irts_filtered[cluster_mask]
     switch_irts = irts_filtered[switch_mask]
-    
-    # Remove NaN values
     cluster_irts = cluster_irts[~np.isnan(cluster_irts)]
     switch_irts = switch_irts[~np.isnan(switch_irts)]
     
-    # === CALCULATE STATISTICS FOR TITLE ===
-    n_words = len(transcriptions_filtered)
-    n_cluster = len(cluster_irts)
-    n_switch = len(switch_irts)
-    n_categories = len(np.unique(cat_ids_filtered))
+    # === PLOTTING ===
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(2, 3)
     
-    # === CREATE 4-SUBPLOT FIGURE ===
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-    fig.suptitle(f"{subject} {session}: {n_words} words ({n_cluster} cluster, {n_switch} switch), {n_categories} categories", 
-                 fontsize=14)
+    # === RESTORED INFORMATIVE HEADER ===
+    fig.suptitle(f"{subject} {session}: {n_total} words ({n_cluster_count} cluster, {n_switch_count} switch) | {n_cats} categories", fontsize=16)
     
-    # === SUBPLOT 1: LINEAR HISTOGRAM ===
-    ax1 = axes[0]
-    # Create bins with explicit 20+ bin
-    bins = np.linspace(0, 20, 21)  # 0-20 in 1s bins
-    
-    # Clip values > 20 to 20 for visualization
-    cluster_irts_clipped = np.clip(cluster_irts, 0, 20)
-    switch_irts_clipped = np.clip(switch_irts, 0, 20)
-    
-    ax1.hist(cluster_irts_clipped, bins=bins, alpha=0.6, label="Cluster")
-    ax1.hist(switch_irts_clipped, bins=bins, alpha=0.6, label="Switch")
-    ax1.set_xlabel("IRT (s)")
-    ax1.set_ylabel("Count")
+    # 1. Linear Hist
+    ax1 = fig.add_subplot(gs[0, 0])
+    bins = np.linspace(0, 20, 21)
+    ax1.hist(np.clip(cluster_irts, 0, 20), bins=bins, alpha=0.6, label="Cluster")
+    ax1.hist(np.clip(switch_irts, 0, 20), bins=bins, alpha=0.6, label="Switch")
     ax1.set_title("IRT Distribution (Linear)")
-    ax1.set_xlim(0, 20)
     ax1.legend()
-    ax1.grid(True, alpha=0.3)
     
-    # === SUBPLOT 2: LOG-TRANSFORMED HISTOGRAM ===
-    ax2 = axes[1]
-    # Log-transform IRTs (add small constant to avoid log(0))
+    # 2. Log Hist
+    ax2 = fig.add_subplot(gs[0, 1])
     epsilon = 0.001
-    cluster_log_irts = np.log(cluster_irts + epsilon)
-    switch_log_irts = np.log(switch_irts + epsilon)
-    
-    # Create bins for log-transformed data
-    log_bins = np.linspace(-3, 3, 21)  # log(0.01) to log(20)
-    
-    ax2.hist(cluster_log_irts, bins=log_bins, alpha=0.6, label="Cluster")
-    ax2.hist(switch_log_irts, bins=log_bins, alpha=0.6, label="Switch")
-    
-    # Custom x-axis labels
+    log_bins = np.linspace(-3, 3, 21)
+    ax2.hist(np.log(cluster_irts + epsilon), bins=log_bins, alpha=0.6, label="Cluster")
+    ax2.hist(np.log(switch_irts + epsilon), bins=log_bins, alpha=0.6, label="Switch")
     tick_values = [0.1, 0.5, 1, 2, 5, 10, 20]
-    tick_positions = np.log(tick_values)
-    tick_labels = [f"{v}" for v in tick_values]
-    ax2.set_xticks(tick_positions)
-    ax2.set_xticklabels(tick_labels)
-    ax2.set_xlim(-3, 3)
-    
-    ax2.set_xlabel("IRT (s) [log scale]")
-    ax2.set_ylabel("Count")
+    ax2.set_xticks(np.log(tick_values))
+    ax2.set_xticklabels([str(v) for v in tick_values])
     ax2.set_title("IRT Distribution (Log)")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
     
-    # === SUBPLOT 3: LINEAR BOXPLOT ===
-    ax3 = axes[2]
-    # Clip data at 20s for visualization
-    data_clipped = [np.clip(cluster_irts, 0, 20), np.clip(switch_irts, 0, 20)]
-    bp1 = ax3.boxplot(data_clipped, labels=["Cluster", "Switch"], patch_artist=True,
-                      boxprops=dict(facecolor="#A0C4FF"), 
-                      medianprops=dict(color="black", linewidth=2))
-    ax3.set_ylabel("IRT (s)")
-    ax3.set_title("IRT Boxplot (Linear)")
-    ax3.set_ylim(-1, 25)
-    ax3.grid(True, alpha=0.3, axis='y')
+    # 3. Log Boxplot
+    ax3 = fig.add_subplot(gs[0, 2])
+    bp_data = [np.log(cluster_irts+epsilon), np.log(switch_irts+epsilon)]
+    ax3.boxplot(bp_data, tick_labels=["Cluster", "Switch"], patch_artist=True, boxprops=dict(facecolor="#A0C4FF"))
+    ax3.set_yticks(np.log(tick_values))
+    ax3.set_yticklabels([str(v) for v in tick_values])
+    ax3.set_title("IRT Boxplot (Log)")
     
-    # === SUBPLOT 4: LOG-TRANSFORMED BOXPLOT ===
-    ax4 = axes[3]
-    # Log-transform data for boxplot
-    data_log = [cluster_log_irts, switch_log_irts]
-    bp2 = ax4.boxplot(data_log, labels=["Cluster", "Switch"], patch_artist=True,
-                      boxprops=dict(facecolor="#A0C4FF"), 
-                      medianprops=dict(color="black", linewidth=2))
+    # 4. Cluster Size
+    ax4 = fig.add_subplot(gs[1, 0])
+    if len(cluster_sizes) > 0:
+        max_size = int(max(cluster_sizes)) if len(cluster_sizes) > 0 else 5
+        size_bins = np.arange(0.5, max_size + 1.5, 1)
+        ax4.hist(cluster_sizes, bins=size_bins, color="purple", alpha=0.5, edgecolor='black')
+        ax4.set_xlabel("Words in Cluster")
+        ax4.set_ylabel("Frequency")
+        ax4.set_title(f"Cluster Size Dist (Mean: {np.mean(cluster_sizes):.1f})")
+        
+    # 5. Peri-Switch Dynamics
+    ax5 = fig.add_subplot(gs[1, 1:])
     
-    # Set y-axis to log scale with custom labels
-    ax4.set_yticks(tick_positions)
-    ax4.set_yticklabels(tick_labels)
-    ax4.set_ylim(-4, 4)
+    means = []
+    sems = []
+    valid_offsets = []
+    counts = []
     
-    ax4.set_ylabel("IRT (s) [log scale]")
-    ax4.set_title("IRT Boxplot (Log)")
-    ax4.grid(True, alpha=0.3, axis='y')
+    for k in offsets:
+        vals = np.array(peri_switch_data[k])
+        if len(vals) >= MIN_SAMPLES_FOR_PLOT:
+            valid_offsets.append(k)
+            means.append(np.mean(vals))
+            if len(vals) > 1:
+                sems.append(np.std(vals, ddof=1) / np.sqrt(len(vals)))
+            else:
+                sems.append(0)
+            counts.append(len(vals))
+    
+    if valid_offsets:
+        ax5.errorbar(valid_offsets, means, yerr=sems, fmt='-o', capsize=5, color="#D62828", linewidth=2)
+        ax5.set_xlabel("Position Relative to Switch Word (0)")
+        ax5.set_ylabel("Mean IRT (s)")
+        ax5.set_title("IRT Dynamics Before/After Switching")
+        ax5.grid(True, alpha=0.3)
+        ax5.set_xlim(-PERI_SWITCH_WINDOW - 0.5, PERI_SWITCH_WINDOW + 0.5)
+        ax5.set_xticks(offsets)
+        
+        # Annotations (Higher up)
+        for i, txt in enumerate(counts):
+            bar_top = means[i] + sems[i]
+            ax5.annotate(f"n={txt}", (valid_offsets[i], bar_top), 
+                         xytext=(0, 15), textcoords='offset points', 
+                         ha='center', fontsize=8)
+            
+        ax5.axvline(0, color='black', linestyle='--', alpha=0.3)
 
     plt.tight_layout()
     
-    # Save figure
-    fig_path = outdir / f"{subject}_{session}_IRT_analysis.png"
+    fig_path = outdir / f"{subject}_{session}_IRT_Advanced.png"
     plt.savefig(fig_path, dpi=150)
     plt.close()
     
-    # === PRINT SUMMARY STATISTICS ===
-    cluster_mean = np.mean(cluster_irts) if len(cluster_irts) > 0 else np.nan
-    switch_mean = np.mean(switch_irts) if len(switch_irts) > 0 else np.nan
-    
-    print(f"{subject} {session}: mean IRT — "
-          f"switch={switch_mean:.2f}s, "
-          f"cluster={cluster_mean:.2f}s, "
-          f"n={n_words} words ({n_cluster} cluster, {n_switch} switch), "
-          f"{n_categories} categories")
-    print(f"Saved → {fig_path.name}")
+    print(f"Processed {subject} {session}: Saved updated analysis.")
