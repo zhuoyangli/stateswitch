@@ -379,7 +379,7 @@ class MinimalBIDSConverter:
                 continue
             
             # Set phase encoding direction
-            pe_dir = 'j-' if direction == 'AP' else 'j'
+            pe_dir = 'j' if direction == 'AP' else 'j-'
             
             # Add acquisition number if multiple pairs exist
             if num_pairs > 1:

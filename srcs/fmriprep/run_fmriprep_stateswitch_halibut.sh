@@ -11,9 +11,8 @@
 #   tmux attach -t fmriprep_xxx
 
 # Set up paths
-BIDS_DIR="/home/Datasets/stateswitch/bids"
-OUTPUT_DIR="/home/Datasets/stateswitch/derivatives"
-WORK_DIR="/home/Datasets/stateswitch/work"
+BIDS_DIR="/home/datasets/stateswitch/bids"
+OUTPUT_DIR="/home/datasets/stateswitch/derivatives"
 FMRIPREP_IMG="/home/envs/fmriprep/fmriprep-25.2.3.sif"
 FS_LICENSE="/home/envs/fmriprep/license.txt"
 LOG_DIR="/home/zli230/projects/stateswitch/logs/fmriprep"
@@ -23,6 +22,8 @@ mkdir -p ${LOG_DIR}
 # Participant to process
 PARTICIPANT_NUM=$1
 PARTICIPANT=$(printf "%03d" ${PARTICIPANT_NUM})
+
+WORK_DIR="/home/datasets/stateswitch/work/sub-${PARTICIPANT}"
 
 # Generate timestamp for log files
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -36,13 +37,13 @@ echo "Available memory: $(free -h | grep Mem | awk '{print $7}')"
 
 # Determine thread allocation based on system load
 LOAD_INT=${LOAD%.*}
-if [ "$LOAD_INT" -lt 20 ]; then
-    NTHREADS=20
+if [ "$LOAD_INT" -lt 30 ]; then
+    NTHREADS=16
     OMP_NTHREADS=4
     echo "Low system load - using aggressive allocation"
-elif [ "$LOAD_INT" -lt 40 ]; then
-    NTHREADS=16
-    OMP_NTHREADS=3
+elif [ "$LOAD_INT" -lt 60 ]; then
+    NTHREADS=12
+    OMP_NTHREADS=4
     echo "Moderate system load - using conservative allocation"
 else
     echo "High system load (${LOAD}). Consider running later."
@@ -51,7 +52,7 @@ else
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         exit 1
     fi
-    NTHREADS=16
+    NTHREADS=8
     OMP_NTHREADS=2
 fi
 
@@ -77,7 +78,7 @@ seconds_to_hms() {
     echo "System load: ${LOAD}"
     echo "Available memory: $(free -h | grep Mem | awk '{print $7}')"
     echo "Thread allocation: ${NTHREADS} threads, ${OMP_NTHREADS} OMP threads"
-    echo "Total CPU usage: $((NTHREADS * OMP_NTHREADS)) cores"
+    echo "Total CPU usage: ${NTHREADS} cores"
     echo "========================================="
     echo ""
     
@@ -90,13 +91,12 @@ seconds_to_hms() {
     
     # Run fMRIPrep with nice to lower priority
     nice -n 10 singularity run --cleanenv \
-      -B /home/Datasets:/home/Datasets \
+      -B /home/datasets:/home/datasets \
       -B /home/envs:/home/envs:ro \
       ${FMRIPREP_IMG} \
       ${BIDS_DIR} \
       ${OUTPUT_DIR} \
       participant \
-      --skip-bids-validation \
       --ignore slicetiming \
       --participant-label ${PARTICIPANT} \
       --work-dir ${WORK_DIR} \
@@ -106,8 +106,6 @@ seconds_to_hms() {
       --nthreads ${NTHREADS} --omp-nthreads ${OMP_NTHREADS} \
       --notrack \
       --subject-anatomical-reference unbiased \
-      --use-syn-sdc \
-      --force syn-sdc \
       --write-graph \
       --bold2anat-dof 6 \
       --clean-workdir

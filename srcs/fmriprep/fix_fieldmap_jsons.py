@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fix IntendedFor fields in fieldmap JSON files
+Fix IntendedFor and PhaseEncodingDirection fields in fieldmap JSON files
 """
 import json
 import re
@@ -12,8 +12,10 @@ try:
 except ImportError:
     FIELDMAP_INTENDED_FOR = {}
 
-def fix_fieldmap_intendedfor(bids_dir: Path, dry_run: bool = False):
-    """Fix IntendedFor fields in all fieldmap JSON files"""
+def fix_fieldmap(bids_dir: Path, dry_run: bool = False):
+    """Fix IntendedFor and PhaseEncodingDirection fields in all fieldmap JSON files"""
+    
+    ## fix IntendedFor fields
     
     # Find all fieldmap JSON files
     for json_file in sorted(bids_dir.glob("sub-*/ses-*/fmap/*_epi.json")):
@@ -62,27 +64,50 @@ def fix_fieldmap_intendedfor(bids_dir: Path, dry_run: bool = False):
             intended_for = [f"{ses_id}/func/{f.name}" for f in bold_files]
             print(f"{sub_id}/{ses_id}: {json_file.name} -> {len(intended_for)} files (all)")
         
+        ## fix PhaseEncodingDirection fields
+        if '_dir-' not in json_file.name:
+            raise ValueError(f"Missing 'dir-' in filename: {json_file}")
+        
+        dir_filename = json_file.name.split('_dir-')[1].split('_')[0]
+        pe_direction = 'j' if dir_filename == 'AP' else 'j-'
+        
         # Update JSON
         with open(json_file, 'r') as f:
             metadata = json.load(f)
+
+        # Check what needs to be updated
+        needs_intended_for = metadata.get('IntendedFor', []) != intended_for
+        needs_pe_direction = metadata.get('PhaseEncodingDirection') != pe_direction
         
-        if metadata.get('IntendedFor', []) == intended_for:
+        if not needs_intended_for and not needs_pe_direction:
             print(f"  Already correct, skipping")
             continue
         
+        # Build status message
+        updates_needed = []
+        if needs_intended_for:
+            updates_needed.append("IntendedFor")
+        if needs_pe_direction:
+            updates_needed.append("PhaseEncodingDirection")
+        
         if dry_run:
-            print(f"  Would update with: {intended_for}")
+            print(f"  Would update: {', '.join(updates_needed)}")
+            if needs_intended_for:
+                print(f"    IntendedFor: {metadata.get('IntendedFor', [])} -> {intended_for}")
+            if needs_pe_direction:
+                print(f"    PhaseEncodingDirection: {metadata.get('PhaseEncodingDirection')} -> {pe_direction}")
         else:
             metadata['IntendedFor'] = intended_for
+            metadata['PhaseEncodingDirection'] = pe_direction
             with open(json_file, 'w') as f:
                 json.dump(metadata, f, indent=4)
-            print(f"  Updated")
+            print(f"  Updated: {', '.join(updates_needed)}")
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: <bids_dir> [--dry-run]")
+        print(f"Usage: {sys.argv[0]} <bids_dir> [--dry-run]")
         sys.exit(1)
     
     bids_dir = Path(sys.argv[1])
@@ -91,4 +116,4 @@ if __name__ == "__main__":
     if dry_run:
         print("DRY RUN MODE - No files will be modified\n")
     
-    fix_fieldmap_intendedfor(bids_dir, dry_run)
+    fix_fieldmap(bids_dir, dry_run)

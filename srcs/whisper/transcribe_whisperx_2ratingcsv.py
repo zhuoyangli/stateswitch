@@ -44,7 +44,7 @@ def transcribe_with_whisperx(
     language: str = "en",
     output_dir: Optional[Path] = None
 ) -> Optional[Dict[str, Any]]:
-    """Transcribe a single audio file using WhisperX via uvx."""
+    """Transcribe a single audio file using WhisperX."""
     
     if output_dir is None:
         output_dir = TEMP_DIR / "whisperx_output"
@@ -52,29 +52,29 @@ def transcribe_with_whisperx(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Use whisperx directly instead of uvx
     cmd = [
-        "uvx", "whisperx",
+        "whisperx",
         audio_file,
         "--model", model_name,
         "--language", language,
         "--output_format", "json",
         "--output_dir", str(output_dir),
-        "--align_model", "WAV2VEC2_ASR_LARGE_LV60K_960H"  # For word-level timestamps
+        "--align_model", "WAV2VEC2_ASR_LARGE_LV60K_960H",
+        # Force CPU to avoid cuDNN issues
+        "--device", "cpu",
+        "--compute_type", "float32"
     ]
-    # Add GPU support if available
-    try:
-        import torch
-        if torch.cuda.is_available():
-            cmd.extend(["--device", "cuda", "--compute_type", "float16"])
-        else:
-            # For CPU, use float32
-            cmd.extend(["--device", "cpu", "--compute_type", "float32"])
-    except ImportError:
-        # If torch not available, use CPU with float32
-        cmd.extend(["--device", "cpu", "--compute_type", "float32"])
     
     logger.info(f"Running WhisperX on {audio_file}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    logger.info("Using CPU for transcription (cuDNN not available)")
+    logger.debug(f"Command: {' '.join(cmd)}")
+    
+    # Set environment variable to handle torch.load weights_only issue
+    env = os.environ.copy()
+    env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "true"
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     
     if result.returncode != 0:
         logger.error(f"WhisperX failed: {result.stderr}")
@@ -133,7 +133,7 @@ def should_skip_file(wav_file: Path, output_path: Path) -> bool:
     csv_path = output_path / f"{base_name}_rating.csv"
     return transcript_path.exists() and csv_path.exists()
 
-def get_wav_files(session_path: Path, task: Optional[str] = None) -> List[Path]:
+def get_wav_files(session_path: Path, task: Optional[str] = None, run: Optional[str] = None) -> List[Path]:
     """Get WAV files, optionally filtered by task."""
     
     # Look in audio subdirectory
@@ -144,7 +144,11 @@ def get_wav_files(session_path: Path, task: Optional[str] = None) -> List[Path]:
     
     if task:
         # Look for files with the specific task in the filename
-        pattern = f"*task-{task}*audio.wav"
+        if run:
+            pattern = f"*task-{task}*run-{run}*audio.wav"
+        else:
+            pattern = f"*task-{task}*audio.wav"
+
         wav_files = sorted(audio_path.glob(pattern))
         
         if not wav_files:
@@ -161,6 +165,7 @@ def transcribe_session(
     subject: str,
     session: str,
     task: Optional[str] = None,
+    run: Optional[str] = None,
     model_name: str = "large-v3",
     skip_existing: bool = True,
     save_to_source: bool = True
@@ -174,7 +179,7 @@ def transcribe_session(
         raise FileNotFoundError(f"Session path does not exist: {session_path}")
     
     # Find WAV files
-    wav_files = get_wav_files(session_path, task)
+    wav_files = get_wav_files(session_path, task, run)
     
     if not wav_files:
         if task:
@@ -193,7 +198,8 @@ def transcribe_session(
         output_path = TRANSCRIPTION_OUTPUT_DIR / relative_path
     
     task_info = f" for task '{task}'" if task else ""
-    logger.info(f"Found {len(wav_files)} WAV files{task_info} in sub-{subject}/ses-{session}")
+    run_info = f" and run '{run}'" if run else ""
+    logger.info(f"Starting transcription{task_info}{run_info} for sub-{subject}/ses-{session}")
     logger.info(f"Audio files located in: {audio_dir}")
     logger.info(f"Output directory: {output_path}")
     logger.info(f"Using BIDS directory: {DATA_DIR / 'rec' / 'bids'}")
@@ -258,6 +264,7 @@ def main():
         type=str, 
         help="Specific task to transcribe (e.g., 'svf', 'sb', 'rest')"
     )
+    parser.add_argument("--run", type=str, help="Specific run identifier if applicable")
     parser.add_argument(
         "--model", 
         type=str, 
@@ -288,6 +295,7 @@ def main():
             subject=args.subject,
             session=args.session,
             task=args.task,
+            run=args.run,
             model_name=args.model,
             skip_existing=not args.no_skip_existing,
             save_to_source=not args.save_to_whisper_dir
