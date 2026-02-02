@@ -167,16 +167,19 @@ for subj, data in subject_data.items():
     
     n_pre = data["n_valid_pre_seqs"]
     n_post = data["n_valid_post_seqs"]
+    n_cats = data["n_categories"]
     
     print(f"Subject {subj}:")
-    print(f"  - Total Clusters: {len(cluster_sizes)}")
+    print(f"  - Total Categories Visited: {n_cats}")
     print(f"  - Valid Pre-Switch (-3 to -1): {n_pre}")
     print(f"  - Valid Post-Switch (0 to 2): {n_post}")
+    print(f"  - Expected Diff (Post - Pre) ≈ Categories: {n_post - n_pre}")
 
     fig = plt.figure(figsize=(18, 10))
     gs = fig.add_gridspec(2, 3)
     
-    fig.suptitle(f"{subj} (Aggregated {data['session_count']} sessions): {data['n_total_words']} words", fontsize=16)
+    # === UPDATED HEADER TO INCLUDE CATEGORIES ===
+    fig.suptitle(f"{subj} ({data['session_count']} sessions): {data['n_total_words']} words | {n_cats} categories", fontsize=16)
     
     # 1. Linear Hist
     ax1 = fig.add_subplot(gs[0, 0])
@@ -251,7 +254,7 @@ for subj, data in subject_data.items():
         ax5.axvline(0, color='black', linestyle='--', alpha=0.3)
         
         # Add text annotation
-        ax5.text(0.02, 0.95, f"Filtering criteria:\nLeft: Prev Cluster ≥ {PERI_SWITCH_WINDOW}\nRight: Curr Cluster ≥ {PERI_SWITCH_WINDOW}", 
+        ax5.text(0.02, 0.95, f"Left: Prev Cluster ≥ {PERI_SWITCH_WINDOW}\nRight: Curr Cluster ≥ {PERI_SWITCH_WINDOW}", 
                  transform=ax5.transAxes, fontsize=9, verticalalignment='top', 
                  bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 

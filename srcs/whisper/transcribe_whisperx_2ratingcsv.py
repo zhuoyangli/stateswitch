@@ -257,7 +257,7 @@ def main():
         description="Transcribe audio files using WhisperX and create rating CSV files",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--subject", type=str, required=True, help="Subject identifier (e.g., '01')")
+    parser.add_argument("--subject", type=str, required=True, help="Subject identifier (e.g., '001')")
     parser.add_argument("--session", type=str, required=True, help="Session identifier (e.g., '01')")
     parser.add_argument(
         "--task", 
