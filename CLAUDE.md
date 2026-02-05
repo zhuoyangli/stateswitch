@@ -63,9 +63,10 @@ Audio → WhisperX → Behavioral Analysis
 
 ## Key Conventions
 
+- **Only use uv to run scripts**
 - **All scripts import `from configs.config`** - never hardcode paths
 - **Parcel time series cached to `.npz`** - cache keys include subject, session, task, atlas
 - **Subject IDs:** sub-001, 003, 004, 006, 007, 008, 009 (7 subjects)
 - **TR = 1.5 seconds**
 - **Z-score within subjects** before group analysis
-- **Visualization threshold:** z > 1.98
+- **For all figures:** use the same axis limits for all subplots

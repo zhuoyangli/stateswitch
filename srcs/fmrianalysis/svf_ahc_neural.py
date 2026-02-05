@@ -54,7 +54,13 @@ except ImportError:
 
 # === PATH DEFINITIONS ===
 SVF_ANNOTATIONS_DIR = DATA_DIR / "rec/svf_annotated"
+SVF_RATINGS_DIR = DATA_DIR / "rec/svf_ratings"
 AHC_ANNOTATIONS_DIR = DATA_DIR / "rec/ahc_sentences"
+
+# === RATING CONSTANTS ===
+RATERS = ['AS', 'GL', 'JC', 'KG']  # 4 raters for SVF switch/cluster annotations
+CONSENSUS_THRESHOLD = 3  # Minimum raters that must agree for consensus
+# Rating labels: 0 = unsure, 1 = clustering, 2 = switching
 
 NEURAL_FIGS_DIR = FIGS_DIR / "neural"
 NEURAL_FIGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -498,44 +504,134 @@ def plot_group_surface_contrast(all_results, output_path, title="Group Contrast"
 # SVF NEURAL ANALYSIS
 # ============================================================================
 
-def get_svf_events(subject, session):
-    """Load SVF events (switch vs cluster) with timing information."""
-    csv_path = SVF_ANNOTATIONS_DIR / f"{subject}_{session}_task-svf_desc-wordtimestampswithswitch.csv"
-    
-    if not csv_path.exists():
-        candidates = list(SVF_ANNOTATIONS_DIR.glob(f"{subject}_{session}*wordtimestamps*.csv"))
-        if candidates:
-            csv_path = candidates[0]
+def load_consensus_ratings(subject, session):
+    """
+    Load SVF ratings from all raters and compute consensus labels.
+
+    Reads rating files from each rater's directory and merges them.
+    A word is labeled as 'switch' or 'cluster' only if at least CONSENSUS_THRESHOLD
+    raters agree on that label. Words without consensus are labeled as 0 (excluded).
+
+    Rating labels in files: 0 = unsure, 1 = clustering, 2 = switching
+    Consensus labels: 0 = no consensus (excluded), 1 = cluster, 2 = switch
+
+    Returns:
+        DataFrame with columns: word, start, end, consensus_label (0, 1, or 2)
+    """
+    all_ratings = []
+
+    for rater in RATERS:
+        xlsx_path = SVF_RATINGS_DIR / rater / f"{subject}_{session}_task-svf_desc-wordtimestamps_rated.xlsx"
+
+        if not xlsx_path.exists():
+            print(f"    Warning: Missing rating file for rater {rater}: {xlsx_path}")
+            continue
+
+        df = pd.read_excel(xlsx_path)
+        df['rater'] = rater
+        all_ratings.append(df)
+
+    if len(all_ratings) == 0:
+        raise FileNotFoundError(f"No rating files found for {subject} {session}")
+
+    # Combine all raters' data
+    combined = pd.concat(all_ratings, ignore_index=True)
+
+    # Standardize column names (some files may have 'word' vs 'transcription')
+    if 'transcription' in combined.columns and 'word' not in combined.columns:
+        combined['word'] = combined['transcription']
+
+    # Group by word timing to compute consensus
+    # Use start time as the primary grouping key (words should have same start time across raters)
+    combined['start_rounded'] = combined['start'].round(2)
+
+    consensus_data = []
+    for start_time, group in combined.groupby('start_rounded'):
+        # Get the word and timing from first row (should be same across raters)
+        first_row = group.iloc[0]
+        word = first_row['word']
+        start = first_row['start']
+        end = first_row['end']
+
+        # Count ratings (excluding NaN/unsure which is 0)
+        ratings = group['switch_flag'].dropna().astype(int)
+        n_switch = (ratings == 2).sum()  # 2 = switching
+        n_cluster = (ratings == 1).sum()  # 1 = clustering
+
+        # Determine consensus label
+        if n_switch >= CONSENSUS_THRESHOLD:
+            consensus_label = 2  # switch
+        elif n_cluster >= CONSENSUS_THRESHOLD:
+            consensus_label = 1  # cluster
         else:
-            raise FileNotFoundError(f"No SVF CSV for {subject} {session}")
-    
-    df = pd.read_csv(csv_path)
+            consensus_label = 0  # no consensus, will be excluded
+
+        consensus_data.append({
+            'word': word,
+            'start': start,
+            'end': end,
+            'consensus_label': consensus_label,
+            'n_switch_votes': n_switch,
+            'n_cluster_votes': n_cluster,
+        })
+
+    consensus_df = pd.DataFrame(consensus_data)
+    consensus_df = consensus_df.sort_values('start').reset_index(drop=True)
+
+    return consensus_df
+
+
+def get_svf_events(subject, session):
+    """
+    Load SVF events (switch vs cluster) with timing information using consensus ratings.
+
+    Uses ratings from multiple raters (defined in RATERS) and requires at least
+    CONSENSUS_THRESHOLD raters to agree on a label for it to be included.
+    Words without consensus (label=0) are excluded from analysis.
+
+    Consensus labels: 0 = no consensus (excluded), 1 = clustering, 2 = switching
+    """
+    # Load consensus ratings from all raters
+    df = load_consensus_ratings(subject, session)
     df = df.sort_values("start").reset_index(drop=True)
-    df["switch_flag"] = pd.to_numeric(df["switch_flag"], errors="coerce").fillna(0).astype(int)
-    
+
+    # Compute preceding word info BEFORE any filtering (to preserve timing relationships)
     df["preceding_end"] = df["end"].shift(1)
-    df["preceding_switch_flag"] = df["switch_flag"].shift(1)
-    df["preceding_word"] = df["transcription"].shift(1).astype(str).str.lower()
-    
-    df = df[df["transcription"].astype(str).str.lower() != "next"].copy()
-    
-    is_switch = df["switch_flag"] == 1
-    prev_was_switch = df["preceding_switch_flag"] == 1
-    prev_was_next = df["preceding_word"] == "next"
-    df = df[~(is_switch & (prev_was_switch | prev_was_next))].copy()
-    
+    df["preceding_consensus"] = df["consensus_label"].shift(1)
+    df["preceding_word"] = df["word"].shift(1).astype(str).str.lower()
+
+    # Convert to scanner time (offset by scanner start)
     df["onset"] = df["start"] - SCANNER_START_OFFSET
     df["prev_offset"] = df["preceding_end"] - SCANNER_START_OFFSET
-    
-    df = df[df["onset"] >= 0].copy()
-    
-    switch_timepoints = df[df["switch_flag"] == 1]["prev_offset"].dropna().values
-    cluster_timepoints = df[df["switch_flag"] == 0]["prev_offset"].dropna().values
-    
+
+    # Build masks for filtering (without modifying df)
+    # Exclude 'next' prompts
+    is_next = df["word"].astype(str).str.lower() == "next"
+
+    # Exclude words without consensus
+    has_consensus = df["consensus_label"] != 0
+
+    # Identify switches and clusters
+    is_switch = df["consensus_label"] == 2
+    is_cluster = df["consensus_label"] == 1
+
+    # Exclude switches that follow another switch or 'next'
+    prev_was_switch = df["preceding_consensus"] == 2
+    prev_was_next = df["preceding_word"] == "next"
+    valid_switch = is_switch & ~prev_was_switch & ~prev_was_next
+
+    # Valid events: not 'next', has consensus, onset >= 0
+    valid_event = ~is_next & has_consensus & (df["onset"] >= 0)
+
+    # Extract timepoints
     min_time = TRS_BEFORE * TR
-    switch_timepoints = switch_timepoints[switch_timepoints >= min_time]
-    cluster_timepoints = cluster_timepoints[cluster_timepoints >= min_time]
-    
+
+    switch_mask = valid_event & valid_switch & (df["prev_offset"] >= min_time)
+    cluster_mask = valid_event & is_cluster & (df["prev_offset"] >= min_time)
+
+    switch_timepoints = df.loc[switch_mask, "prev_offset"].dropna().values
+    cluster_timepoints = df.loc[cluster_mask, "prev_offset"].dropna().values
+
     return switch_timepoints, cluster_timepoints
 
 
