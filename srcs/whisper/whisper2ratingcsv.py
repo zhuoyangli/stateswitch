@@ -1,9 +1,6 @@
 import sys
 from pathlib import Path
 
-# Add the parent directory to sys.path to import from configs
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 # Now you can import from configs
 from configs.config import PROJECT_ROOT
 

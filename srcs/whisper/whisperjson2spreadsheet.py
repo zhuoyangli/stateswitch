@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 # Add parent directory to path to import from configs
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 try:
     from configs.config import DATA_DIR
 except ImportError:

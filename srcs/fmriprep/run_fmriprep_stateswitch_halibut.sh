@@ -29,32 +29,9 @@ WORK_DIR="/home/datasets/stateswitch/work/sub-${PARTICIPANT}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_DIR}/fmriprep_sub-${PARTICIPANT}_${TIMESTAMP}.log"
 
-# Check system load before starting
-echo "Checking system resources..."
-LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk -F, '{print $1}' | xargs)
-echo "Current system load: ${LOAD}"
-echo "Available memory: $(free -h | grep Mem | awk '{print $7}')"
-
-# Determine thread allocation based on system load
-LOAD_INT=${LOAD%.*}
-if [ "$LOAD_INT" -lt 30 ]; then
-    NTHREADS=16
-    OMP_NTHREADS=4
-    echo "Low system load - using aggressive allocation"
-elif [ "$LOAD_INT" -lt 60 ]; then
-    NTHREADS=12
-    OMP_NTHREADS=4
-    echo "Moderate system load - using conservative allocation"
-else
-    echo "High system load (${LOAD}). Consider running later."
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-    NTHREADS=8
-    OMP_NTHREADS=2
-fi
+# Thread allocation
+NTHREADS=16
+OMP_NTHREADS=8
 
 # Function to convert seconds to HH:MM:SS
 seconds_to_hms() {
@@ -75,10 +52,7 @@ seconds_to_hms() {
     echo "BIDS directory: ${BIDS_DIR}"
     echo "Output directory: ${OUTPUT_DIR}"
     echo "Work directory: ${WORK_DIR}"
-    echo "System load: ${LOAD}"
-    echo "Available memory: $(free -h | grep Mem | awk '{print $7}')"
     echo "Thread allocation: ${NTHREADS} threads, ${OMP_NTHREADS} OMP threads"
-    echo "Total CPU usage: ${NTHREADS} cores"
     echo "========================================="
     echo ""
     

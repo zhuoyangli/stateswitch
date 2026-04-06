@@ -17,10 +17,6 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 
 # === 1. CONFIG & PATHS ===
-current_file = Path(__file__).resolve()
-project_root = current_file.parent.parent
-sys.path.insert(0, str(project_root))
-
 try:
     from configs.config import DATA_DIR, DERIVATIVES_DIR, FIGS_DIR
 except ImportError:

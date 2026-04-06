@@ -23,10 +23,6 @@ from nilearn.glm.first_level import FirstLevelModel
 from nilearn.interfaces.fmriprep import load_confounds_strategy
 
 # === CONFIG SETUP ===
-current_file = Path(__file__).resolve()
-project_root = current_file.parent.parent
-sys.path.insert(0, str(project_root))
-
 try:
     from configs.config import DATA_DIR, DERIVATIVES_DIR, FIGS_DIR, TR
 except ImportError:

@@ -23,7 +23,10 @@ def verify_parcel_labels():
     keywords = {
         "Precuneus": ['pCun'],
         "Cingulate": ['Cing'],
-        "Salience": ['Sal']
+        "Salience": ['Sal'],
+        "Angular Gyrus": ['AG'],
+        "Auditory Cortex": ['Aud'],
+        "Visual Cortex": ['Vis']
     }
 
     print("\n" + "="*60)

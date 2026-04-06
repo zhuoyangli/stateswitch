@@ -2,9 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication Style
+
+When asked for a fix or change, just implement it — don't explain the issue first unless asked for an explanation. Bias toward action.
+
 ## Project Overview
 
 StateSwitch is a neuroscience research project investigating neural mechanisms underlying semantic/cognitive state transitions. It analyzes behavioral and fMRI data from participants performing semantic verbal fluency (SVF) and ad-hoc categories (AHC) tasks.
+
+This project uses Python for all analysis. Key libraries: nibabel, nilearn, matplotlib, numpy, scipy. Data is fMRI BOLD timeseries with parcellated and surface-based analyses.
 
 ## Tech Stack
 
@@ -69,4 +75,16 @@ Audio → WhisperX → Behavioral Analysis
 - **Subject IDs:** sub-001, 003, 004, 006, 007, 008, 009 (7 subjects)
 - **TR = 1.5 seconds**
 - **Z-score within subjects** before group analysis
-- **For all figures:** use the same axis limits for all subplots
+- **For all figures:** subplots always share the same axis limits unless explicitly specified otherwise
+
+## Code Conventions
+
+When `ROI_SPEC` or any ROI label list is updated, propagate changes to ALL scripts that reference ROI counts or ROI ordering. Always check for hardcoded ROI counts (e.g. `plt.subplots(5, ...)`, `ROI_ROWS = [...]`) before running.
+
+## Figures & Visualization
+
+When asked to change a figure property (color scale, layout, labels, etc.), apply the change to exactly the figure/script specified — do not modify other figures or scripts unless explicitly asked.
+
+## Running Jobs
+
+All long-running neuroimaging jobs should be launched in tmux sessions so they persist. Use `tmux new-session -d -s <name>` pattern.

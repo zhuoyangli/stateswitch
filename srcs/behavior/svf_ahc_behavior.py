@@ -20,7 +20,6 @@ Usage:
     python svf_ahc_behavior.py --summary                # Output summary statistics only
 """
 
-import sys
 import os
 import argparse
 import warnings
@@ -39,10 +38,6 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # === PROJECT CONFIG ===
-current_file = Path(__file__).resolve()
-project_root = current_file.parent.parent
-sys.path.insert(0, str(project_root))
-
 try:
     from configs.config import DATA_DIR, DERIVATIVES_DIR, FIGS_DIR
 except ImportError:

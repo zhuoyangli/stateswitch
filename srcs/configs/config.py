@@ -51,3 +51,27 @@ elif Path('/home/zli230').exists(): # lab server
 TR = 1.5  # Repetition time in seconds
 
 SUBJECT_IDS = ['sub-001', 'sub-003', 'sub-004', 'sub-006', 'sub-007', 'sub-008', 'sub-009']
+
+ANALYSIS_CACHE_DIR = CACHE_DIR / 'analyses'
+
+FILMFEST_SUBJECTS = {
+    'sub-003': 'ses-10',
+    'sub-004': 'ses-10',
+    'sub-006': 'ses-08',
+    'sub-007': 'ses-08',
+    'sub-008': 'ses-08',
+    'sub-009': 'ses-07',
+}
+
+MOVIE_INFO = [
+    {'id': 1,  'file': 'FilmFest_01_CMIYC_Segments.xlsx',         'task': 'filmfest1'},
+    {'id': 2,  'file': 'FilmFest_02_The_Record_Segments.xlsx',     'task': 'filmfest1'},
+    {'id': 3,  'file': 'FilmFest_03_The_Boyfriend_Segments.xlsx',  'task': 'filmfest1'},
+    {'id': 4,  'file': 'FilmFest_04_The_Shoe_Segments.xlsx',       'task': 'filmfest1'},
+    {'id': 5,  'file': 'FilmFest_05_Keith_Reynolds_Segments.xlsx', 'task': 'filmfest1'},
+    {'id': 6,  'file': 'FilmFest_06_The_Rock_Segments.xlsx',       'task': 'filmfest2'},
+    {'id': 7,  'file': 'FilmFest_07_The_Prisoner_Segments.xlsx',   'task': 'filmfest2'},
+    {'id': 8,  'file': 'FilmFest_08_The_Black_Hole_Segments.xlsx', 'task': 'filmfest2'},
+    {'id': 9,  'file': 'FilmFest_09_Post-it_Love_Segments.xlsx',   'task': 'filmfest2'},
+    {'id': 10, 'file': 'FilmFest_10_Bus_Stop_Segments.xlsx',       'task': 'filmfest2'},
+]
