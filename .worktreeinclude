@@ -1,0 +1,8 @@
+# Copy the virtual environment so worktrees can run scripts immediately
+.venv/
+
+# Copy cached parcel extractions to avoid expensive re-extraction
+data/
+
+# Copy nilearn atlas cache
+nilearn_cache/
