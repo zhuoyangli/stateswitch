@@ -101,6 +101,8 @@ TASK_SLICES: dict = {}
 
 # Onset mode: use trial start times instead of end times (set in main)
 USE_ONSET = False
+# Title-onset mode: use trial onsets for SVF/AHC, raw movie offsets (no +6s) for filmfest
+USE_TITLE_ONSET = False
 
 ROI_SPEC = [
     ('eac',   'Early Auditory Cortex',     get_bilateral_ids(EARLY_AUDITORY)),
@@ -159,7 +161,7 @@ def get_svf_offsets_by_category(subject, session):
     result = {}
     for _, row in rows.iterrows():
         cat        = row['category_name']
-        col        = 'svf_trial.started' if USE_ONSET else 'svf_trial.stopped'
+        col        = 'svf_trial.started' if (USE_ONSET or USE_TITLE_ONSET) else 'svf_trial.stopped'
         offset_sec = row[col] - first_start
         tr         = int(round(offset_sec / TR))
         result.setdefault(cat, []).append(tr)
@@ -213,7 +215,7 @@ def get_ahc_offsets_by_prompt(subject, session):
 
     first_start = rows['ahc_trial.started'].iloc[0]
     result = {}
-    col = 'ahc_trial.started' if USE_ONSET else 'ahc_trial.stopped'
+    col = 'ahc_trial.started' if (USE_ONSET or USE_TITLE_ONSET) else 'ahc_trial.stopped'
     for prompt, (_, row) in zip(prompts, rows.iterrows()):
         offset_sec = row[col] - first_start
         tr         = int(round(offset_sec / TR))
@@ -441,7 +443,7 @@ def get_subject_filmfest_patterns(subject, roi_key, parcel_ids, do_hp=False):
             continue
         voxel_data   = preprocess_voxels(raw, do_hp=do_hp)
         onset_secs   = get_all_movie_onsets(task)[1:]  # skip first movie
-        if USE_ONSET:
+        if USE_ONSET:  # title_onset intentionally omits this shift
             onset_secs = [s + 6.0 for s in onset_secs]  # skip 6s title scene
         boundary_trs = [int(round(s / TR)) for s in onset_secs]
         pats, vmask  = extract_boundary_patterns(voxel_data, boundary_trs)
@@ -1045,7 +1047,7 @@ def run_roi(roi_key, roi_name, parcel_ids, subjects,
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     hp_tag     = '_hp' if do_hp else ''
-    onset_tag  = '_onset' if USE_ONSET else ''
+    onset_tag  = '_title_onset' if USE_TITLE_ONSET else ('_onset' if USE_ONSET else '')
     ispc_cache = RESULT_CACHE_DIR / f'roi-{roi_key}_sm6{hp_tag}{onset_tag}_{WINDOW_PRESET}_ispc.npz'
 
     if not force_ispc and ispc_cache.exists():
@@ -1087,7 +1089,7 @@ def run_roi(roi_key, roi_name, parcel_ids, subjects,
         print(f"  [{roi_key}] Cached → {ispc_cache.name}")
 
     hp_label   = 'hp' if do_hp else 'no_hp'
-    onset_label = 'onset' if USE_ONSET else 'offset'
+    onset_label = 'title_onset' if USE_TITLE_ONSET else ('onset' if USE_ONSET else 'offset')
     hp_sub     = OUTPUT_DIR / hp_label / WINDOW_PRESET / onset_label
 
     # Condition-level figure — window-sorted (original cache ordering)
@@ -1172,12 +1174,15 @@ def main():
                         help='Color scale limit for t-value figures (default: 5.0)')
     parser.add_argument('--onset', action='store_true',
                         help='Use trial onset (start) times for SVF/AHC; +6s shift for filmfest')
+    parser.add_argument('--title-onset', action='store_true',
+                        help='Use trial onsets for SVF/AHC; raw movie offsets (no +6s) for filmfest')
     args = parser.parse_args()
 
     global OUTPUT_DIR, N_SVF, N_AHC, N_INSTANCES, N_TOTAL, TASK_SLICES
     global WINDOWS, WINDOW_PRESET, _WIN_TR_SHORT, WINDOW_LABELS, _COND_LABELS
-    global USE_ONSET
+    global USE_ONSET, USE_TITLE_ONSET
     USE_ONSET = args.onset
+    USE_TITLE_ONSET = args.title_onset
     OUTPUT_DIR = FIGS_DIR / 'cross_task_ispc'
 
     # Apply window preset

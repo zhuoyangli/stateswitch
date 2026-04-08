@@ -429,7 +429,7 @@ def _vminmax(panel_maps):
 
 def _render_panels(fig, axes, col_tasks, col_titles, panel_maps, boundary_info,
                    vmin, vmax):
-    """Render imshow panels onto a pre-created axes grid."""
+    """Render imshow panels onto a pre-created axes grid (rows=ROIs, cols=tasks)."""
     for row, (roi_key, roi_name, _) in enumerate(ROI_SPEC):
         for col, task in enumerate(col_tasks):
             ax = axes[row, col]
@@ -457,6 +457,46 @@ def _render_panels(fig, axes, col_tasks, col_titles, panel_maps, boundary_info,
             if col == 0:
                 ax.set_ylabel(roi_name, fontsize=10)
             if row == len(ROI_SPEC) - 1:
+                ax.set_xlabel('Time (s)', fontsize=9)
+
+    sm = plt.cm.ScalarMappable(cmap='RdBu_r',
+                               norm=plt.Normalize(vmin=vmin, vmax=vmax))
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, orientation='vertical',
+                        fraction=0.02, pad=0.02, shrink=0.6)
+    cbar.set_label('Pearson r', fontsize=10)
+
+
+def _render_panels_horizontal(fig, axes, row_tasks, row_titles, panel_maps,
+                               boundary_info, vmin, vmax):
+    """Render imshow panels onto a pre-created axes grid (rows=tasks, cols=ROIs)."""
+    for row, (task, row_title) in enumerate(zip(row_tasks, row_titles)):
+        for col, (roi_key, roi_name, _) in enumerate(ROI_SPEC):
+            ax = axes[row, col]
+            m = panel_maps[task].get(roi_key)
+            if m is None:
+                ax.set_visible(False)
+                continue
+
+            T = m.shape[0]
+            ax.imshow(m, cmap='RdBu_r', vmin=vmin, vmax=vmax,
+                      aspect='equal', origin='upper')
+
+            _add_boundary_lines(ax, T, **boundary_info[task])
+
+            n_ticks = 6
+            tick_idxs = np.linspace(0, T - 1, n_ticks, dtype=int)
+            tick_labels = [str(int(i * TR)) for i in tick_idxs]
+            ax.set_xticks(tick_idxs)
+            ax.set_xticklabels(tick_labels, fontsize=7)
+            ax.set_yticks(tick_idxs)
+            ax.set_yticklabels(tick_labels, fontsize=7)
+
+            if row == 0:
+                ax.set_title(roi_name, fontsize=12, fontweight='bold')
+            if col == 0:
+                ax.set_ylabel(f'{row_title}\nTime (s)', fontsize=10)
+            if row == len(row_tasks) - 1:
                 ax.set_xlabel('Time (s)', fontsize=9)
 
     sm = plt.cm.ScalarMappable(cmap='RdBu_r',
@@ -584,7 +624,7 @@ def make_filmfest_isc_figures(vmin=None, vmax=None, fwhm=None, do_hp=True):
         'filmfest2': dict(movie_boundaries=movie_bounds['filmfest2']),
     }
 
-    # Group ISC figure
+    # Group ISC figure — original layout (4 rows=ROIs × 2 cols=runs)
     sm_file = f'_sm{int(fwhm)}' if fwhm is not None else ''
     hp_file = '_hp' if do_hp else '_nohp'
     fig, axes = plt.subplots(4, 2, figsize=(10, 16))
@@ -597,6 +637,19 @@ def make_filmfest_isc_figures(vmin=None, vmax=None, fwhm=None, do_hp=True):
     plt.savefig(out, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"\nSaved → {out}")
+
+    # Group ISC figure — horizontal layout (2 rows=runs × 4 cols=ROIs)
+    n_rois = len(ROI_SPEC)
+    fig_h, axes_h = plt.subplots(2, n_rois, figsize=(5 * n_rois, 10))
+    fig_h.suptitle(f'Group-Average ISC TTC (LOO){sm_label}{hp_label}',
+                   fontsize=14, fontweight='bold')
+    plt.subplots_adjust(top=0.94)
+    _render_panels_horizontal(fig_h, axes_h, col_tasks, col_titles,
+                               group_panel_maps, boundary_info, vmin, vmax)
+    out_h = ISC_DIR / f'GROUP_isc_ttc_filmfest{sm_file}{hp_file}_horizontal.png'
+    fig_h.savefig(out_h, dpi=300, bbox_inches='tight')
+    plt.close(fig_h)
+    print(f"Saved → {out_h}")
 
     # Per-subject ISC figures
     for subject, session in FILMFEST_SUBJECTS.items():

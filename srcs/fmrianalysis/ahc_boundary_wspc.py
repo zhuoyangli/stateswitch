@@ -139,13 +139,13 @@ def apply_window_preset(name):
 
 
 ROI_SPEC = [
-    ('eac',   'Early Auditory Cortex',     get_bilateral_ids(EARLY_AUDITORY)),
-    ('evc',   'Early Visual Cortex',       get_bilateral_ids(EARLY_VISUAL)),
-    ('pmc',   'Posterior Medial Cortex',   get_bilateral_ids(POSTERIOR_MEDIAL)),
-    ('ag',    'Angular Gyrus',             get_bilateral_ids(ANGULAR_GYRUS)),
-    ('dlpfc', 'Dorsolateral PFC',          get_bilateral_ids(DLPFC)),
-    ('dacc',  'Dorsal Anterior Cingulate', get_bilateral_ids(DACC)),
-    ('hipp',  'Hippocampus',               None),
+    ('hipp',  'Hippocampus', None),
+    ('pmc',   'PMC',         get_bilateral_ids(POSTERIOR_MEDIAL)),
+    ('ag',    'AG',          get_bilateral_ids(ANGULAR_GYRUS)),
+    ('dacc',  'dACC',        get_bilateral_ids(DACC)),
+    ('dlpfc', 'dlPFC',       get_bilateral_ids(DLPFC)),
+    ('eac',   'EAC',         get_bilateral_ids(EARLY_AUDITORY)),
+    ('evc',   'EVC',         get_bilateral_ids(EARLY_VISUAL)),
 ]
 
 # ============================================================================

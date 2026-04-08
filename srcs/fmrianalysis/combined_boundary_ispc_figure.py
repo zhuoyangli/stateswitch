@@ -25,7 +25,7 @@ from configs.config import FIGS_DIR, TR, FILMFEST_SUBJECTS, ANALYSIS_CACHE_DIR
 
 # Import BOLD data pipeline from multitask_boundary_parcel
 from fmrianalysis.multitask_boundary_parcel import (
-    SUBJECT_IDS, TASK_KEYS, TRS_BEFORE, TRS_AFTER, TITLE_SCENE_OFFSET,
+    SUBJECT_IDS, TASK_KEYS, TRS_BEFORE, TRS_AFTER, TITLE_SCENE_OFFSET, NEXT_TRIAL_ONSET,
     discover_sessions, find_psychopy_csv,
     parse_trial_onsets, parse_trial_offsets,
     extract_roi_timeseries, extract_event_locked,
@@ -131,10 +131,15 @@ def load_bold_group_data(align):
     return group_data
 
 
-def load_ispc_data(hp, preset, onset, n_svf, n_ahc):
+def load_ispc_data(hp, preset, onset, n_svf, n_ahc, align='onset'):
     """Load ISPC boundary and mid-event data for the 5 ROIs, FDR-correct."""
     hp_tag    = '_hp' if hp else ''
-    onset_tag = '_onset' if onset else ''
+    if align == 'title_onset':
+        onset_tag = '_title_onset'
+    elif onset:
+        onset_tag = '_onset'
+    else:
+        onset_tag = ''
     roi_keys  = [k for k, _ in ROI_SPEC_COMBINED]
     cond_indices = build_cond_indices(n_svf, n_ahc)
     within_p0, xsame_p0, xdiff_p0 = _comparison_cell_pairs(0)
@@ -237,7 +242,8 @@ def plot_bold_timecourse(ax, group_data, roi_key, roi_title,
                           show_ylabel=True, show_legend=False,
                           show_subtask_annot=False, show_movie_annot=False,
                           title_pad=6, ymax=1.5, legend_loc='upper right',
-                          movie_boundary_ref=-6, movie_annot_label='offset of previous\nmovie (MW)'):
+                          movie_boundary_ref=-6, movie_annot_label='offset of previous\nmovie (MW)',
+                          subtask_boundary_ref=-15, subtask_annot_label='offset of previous\nsubtask (WG, EG)'):
     time_vec = np.arange(-TRS_BEFORE, TRS_AFTER + 1) * TR
 
     for task_key in TASK_KEYS:
@@ -257,8 +263,9 @@ def plot_bold_timecourse(ax, group_data, roi_key, roi_title,
     cap_frac = (_ycap - _ymin) / (ymax - _ymin)
 
     ax.axvspan(0, 15, ymax=cap_frac, color='lightgrey', alpha=0.5, zorder=0)
-    ax.axvline(movie_boundary_ref, ymax=cap_frac, color='#377eb8', ls='--', lw=1.2)
-    ax.axvline(-15, ymax=cap_frac, color='#FF5200', ls='--', lw=1.2)
+    if movie_boundary_ref is not None:
+        ax.axvline(movie_boundary_ref,   ymax=cap_frac, color='#377eb8', ls='--', lw=1.2)
+    ax.axvline(subtask_boundary_ref, ymax=cap_frac, color='#FF5200', ls='--', lw=1.2)
     ax.axvline(0,   ymax=cap_frac, color='#555555', ls='-',  lw=1.2)
     ax.axhline(0,   color='k',     ls='-',  lw=0.5, alpha=0.3)
     ax.set_xlim(-30, 60)
@@ -278,9 +285,9 @@ def plot_bold_timecourse(ax, group_data, roi_key, roi_title,
         ax.legend(fontsize=LABEL_FS, frameon=False,
                   loc=legend_loc, bbox_to_anchor=(1.0, 0.8))
     if show_subtask_annot:
-        ax.text(-15, 1.55, 'offset of previous\nsubtask (WG, EG)',
+        ax.text(subtask_boundary_ref, 1.55, subtask_annot_label,
                 color='#FF5200', fontsize=LABEL_FS-4, ha='center', va='bottom')
-    if show_movie_annot:
+    if show_movie_annot and movie_boundary_ref is not None:
         ax.text(movie_boundary_ref, 1.55, movie_annot_label,
                 color='#377eb8', fontsize=LABEL_FS-4, ha='center', va='bottom')
 
@@ -384,20 +391,29 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Determine movie annotation position and label based on alignment
+    # Determine annotation positions and labels based on alignment
     if args.align == 'title_onset':
-        _movie_boundary_ref   = 0
-        _movie_annot_label    = 'onset of title\nscene (MW)'
+        _movie_boundary_ref    = 0
+        _movie_annot_label     = 'onset of title\nscene (MW)'
+        _subtask_boundary_ref  = -15
+        _subtask_annot_label   = 'offset of previous\nsubtask (WG, EG)'
+    elif args.align == 'offset':
+        _movie_boundary_ref    = None
+        _movie_annot_label     = ''
+        _subtask_boundary_ref  = NEXT_TRIAL_ONSET
+        _subtask_annot_label   = 'onset of next\nsubtask (WG, EG)'
     else:
-        _movie_boundary_ref   = -6
-        _movie_annot_label    = 'offset of previous\nmovie (MW)'
+        _movie_boundary_ref    = -6
+        _movie_annot_label     = 'offset of previous\nmovie (MW)'
+        _subtask_boundary_ref  = -15
+        _subtask_annot_label   = 'offset of previous\nsubtask (WG, EG)'
 
     print('Loading BOLD group data...')
     group_data = load_bold_group_data(args.align)
 
     print('Loading ISPC data...')
     bnd_by_roi, mid_by_roi = load_ispc_data(
-        args.hp, args.preset, args.onset, args.n_svf, args.n_ahc)
+        args.hp, args.preset, args.onset, args.n_svf, args.n_ahc, align=args.align)
 
     hp_label    = 'hp' if args.hp else 'no_hp'
     onset_label = 'onset' if args.onset else 'offset'
@@ -420,7 +436,9 @@ def main():
                                  show_subtask_annot=(i == 0),
                                  show_movie_annot=(i == 1),
                                  movie_boundary_ref=_movie_boundary_ref,
-                                 movie_annot_label=_movie_annot_label)
+                                 movie_annot_label=_movie_annot_label,
+                                 subtask_boundary_ref=_subtask_boundary_ref,
+                                 subtask_annot_label=_subtask_annot_label)
             bnd_data = bnd_by_roi.get(roi_key)
             mid_data = mid_by_roi.get(roi_key)
             if bnd_data is not None and mid_data is not None:
@@ -446,7 +464,9 @@ def main():
                                  show_movie_annot=(i == 1),
                                  title_pad=18, ymax=1.7, legend_loc='center right',
                                  movie_boundary_ref=_movie_boundary_ref,
-                                 movie_annot_label=_movie_annot_label)
+                                 movie_annot_label=_movie_annot_label,
+                                 subtask_boundary_ref=_subtask_boundary_ref,
+                                 subtask_annot_label=_subtask_annot_label)
             bnd_data = bnd_by_roi.get(roi_key)
             mid_data = mid_by_roi.get(roi_key)
             if bnd_data is not None and mid_data is not None:
@@ -455,8 +475,9 @@ def main():
             else:
                 ax_ispc.set_visible(False)
 
+    ispc_ylim = (-0.1, 0.5) if args.align == 'offset' else (-0.05, 0.20)
     for ax in ispc_axes:
-        ax.set_ylim(-0.05, 0.20)
+        ax.set_ylim(*ispc_ylim)
 
     out_path = OUTPUT_DIR / f'combined_bold_ispc_{args.align}_{hp_label}_{args.preset}_{onset_label}_{roi_tag}_{args.layout}.png'
     fig.savefig(out_path, dpi=600, bbox_inches='tight')

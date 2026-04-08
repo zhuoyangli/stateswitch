@@ -140,13 +140,13 @@ def apply_window_preset(name):
     WIN_TAG      = preset['tag']
 
 ROI_SPEC = [
-    ('eac',   'EAC',         get_bilateral_ids(EARLY_AUDITORY)),
-    ('evc',   'EVC',         get_bilateral_ids(EARLY_VISUAL)),
+    ('hipp',  'Hippocampus', None),  # None = use H-O mask
     ('pmc',   'PMC',         get_bilateral_ids(POSTERIOR_MEDIAL)),
     ('ag',    'AG',          get_bilateral_ids(ANGULAR_GYRUS)),
-    ('hipp',  'Hippocampus', None),  # None = use H-O mask
-    ('dlpfc', 'dlPFC',       get_bilateral_ids(DLPFC)),
     ('dacc',  'dACC',        get_bilateral_ids(DACC)),
+    ('dlpfc', 'dlPFC',       get_bilateral_ids(DLPFC)),
+    ('eac',   'EAC',         get_bilateral_ids(EARLY_AUDITORY)),
+    ('evc',   'EVC',         get_bilateral_ids(EARLY_VISUAL)),
 ]
 
 # ============================================================================
