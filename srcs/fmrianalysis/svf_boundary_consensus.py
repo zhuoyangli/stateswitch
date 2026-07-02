@@ -19,9 +19,10 @@ Word times in the CSV are transcript-recording seconds; scan-relative time =
     t - SCANNER_START_OFFSET (12.0 s).
 
 Alignment (--align):
-  onset  (default) : lock to the word's own onset (`start`).
-  offset           : lock to the offset (`end`) of the preceding word within the
+  offset (default) : lock to the offset (`end`) of the preceding word within the
                      same category (the moment just before the transition).
+                     A dotted vertical line marks the mean current-word onset.
+  onset            : lock to the word's own onset (`start`).
 
 Usage:
     uv run python srcs/fmrianalysis/svf_boundary_consensus.py
@@ -139,7 +140,10 @@ def find_svf_sessions(words):
 def get_consensus_events(words_ses, conditions, align):
     """Scan-relative event times per condition for one (subject, session).
 
-    Returns {cond_key: np.array of times (s)}.
+    Returns (times, gaps) where each is {cond_key: np.array}. `gaps` holds the
+    current word's onset relative to the lock point (0 for onset alignment; the
+    preceding-offset->onset gap for offset alignment), used to draw the onset
+    marker line.
     """
     df = words_ses.sort_values('start').reset_index(drop=True)
 
@@ -150,13 +154,16 @@ def get_consensus_events(words_ses, conditions, align):
         df['lock'] = df['start']
 
     df['event_t'] = df['lock'] - SCANNER_START_OFFSET
+    df['gap'] = df['start'] - df['lock']  # current-word onset relative to lock
     df = df[df['event_t'].notna() & (df['event_t'] >= TRS_BEFORE * TR)]
 
     cond_of = assign_condition(df, ARGS_MODE)
-    out = {}
+    times, gaps = {}, {}
     for key, _, _ in conditions:
-        out[key] = df.loc[cond_of == key, 'event_t'].to_numpy()
-    return out
+        sel = cond_of == key
+        times[key] = df.loc[sel, 'event_t'].to_numpy()
+        gaps[key] = df.loc[sel, 'gap'].to_numpy()
+    return times, gaps
 
 
 # ============================================================================
@@ -245,20 +252,32 @@ def _make_axes(n_roi):
     return fig, axes[:n_roi]
 
 
-def plot_subject_timecourse(subject, data, conditions, align, mode):
+def _draw_onset_lines(ax, conditions, onset_lines):
+    """Dotted vertical line per condition at its mean current-word onset time."""
+    if not onset_lines:
+        return
+    for key, _, color in conditions:
+        x = onset_lines.get(key)
+        if x is not None and np.isfinite(x) and abs(x) > 1e-6:
+            ax.axvline(x, color=color, ls=':', lw=1.6, alpha=0.9)
+
+
+def plot_subject_timecourse(subject, data, conditions, align, mode, onset_lines):
     fig, axes = _make_axes(len(ROI_SPEC))
     tv = data['time_vec']
-    xlabel = ('Time from preceding-word offset (s)' if align == 'offset'
+    xlabel = ('Time from previous word offset (s)' if align == 'offset'
               else 'Time from word onset (s)')
+    onset_note = ('  (dotted line = current word onset)' if align == 'offset' else '')
 
     fig.suptitle(f"SVF peri-boundary ROI responses by consensus level: {subject} "
-                 f"(N={data['n_sessions']} sessions)\nLocked to {xlabel.lower()}",
+                 f"(N={data['n_sessions']} sessions)\nLocked to {xlabel.lower()}{onset_note}",
                  fontsize=TITLE_FS, fontweight='bold')
 
     for ax, (roi, title) in zip(axes, ROI_SPEC):
         for key, label, color in conditions:
             ax.plot(tv, data[f'{roi}::{key}_tc'], color=color, lw=2.2, label=label)
         ax.axvline(0, color='grey', ls='--', alpha=0.6)
+        _draw_onset_lines(ax, conditions, onset_lines)
         ax.axhline(0, color='k', ls='-', alpha=0.3)
         ax.set(xlabel=xlabel, ylabel='BOLD (z)', title=title, xlim=(tv[0], tv[-1]))
         ax.spines[['top', 'right']].set_visible(False)
@@ -272,15 +291,20 @@ def plot_subject_timecourse(subject, data, conditions, align, mode):
     print(f"  Saved {out}")
 
 
-def plot_group_timecourse(subject_data, conditions, align, mode):
+def plot_group_timecourse(subject_data, conditions, align, mode, onset_lines):
     tv = next(iter(subject_data.values()))['time_vec']
     n_tp = len(tv)
     subs = list(subject_data.values())
-    xlabel = ('Time from preceding-word offset (s)' if align == 'offset'
+    xlabel = ('Time from previous word offset (s)' if align == 'offset'
               else 'Time from word onset (s)')
 
     fig, axes = _make_axes(len(ROI_SPEC))
-    note = ('  |  * switching vs clustering, p<0.05 uncorr.' if mode == 'class' else '')
+    bits = []
+    if align == 'offset':
+        bits.append('dotted line = current word onset')
+    if mode == 'class':
+        bits.append('* switching vs clustering, p<0.05 uncorr.')
+    note = ('  |  ' + '  |  '.join(bits)) if bits else ''
     fig.suptitle(f"SVF peri-boundary ROI responses by consensus level: "
                  f"Group (N={len(subs)} subjects)\nLocked to {xlabel.lower()}{note}",
                  fontsize=TITLE_FS, fontweight='bold')
@@ -298,6 +322,7 @@ def plot_group_timecourse(subject_data, conditions, align, mode):
             ax.plot(tv, m, color=color, lw=2.5, label=label, marker='o', ms=3)
             ax.fill_between(tv, m - se, m + se, color=color, alpha=0.25)
         ax.axvline(0, color='grey', ls='--', lw=1)
+        _draw_onset_lines(ax, conditions, onset_lines)
         ax.axhline(0, color='k', ls='-', alpha=0.3)
         ax.set(xlabel=xlabel, ylabel='BOLD (z)', title=title,
                xlim=(tv[0] - 0.5, tv[-1] + 0.5))
@@ -340,8 +365,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--by', choices=['class', 'votes'], default='class',
                     help="Consensus grouping: 3-way class (default) or per k_switch_votes.")
-    ap.add_argument('--align', choices=['onset', 'offset'], default='onset',
-                    help="Lock to word onset (default) or preceding-word offset.")
+    ap.add_argument('--align', choices=['onset', 'offset'], default='offset',
+                    help="Lock to previous word offset (default) or the word's own onset.")
     args = ap.parse_args()
     ARGS_MODE = args.by
 
@@ -367,12 +392,15 @@ def main():
     n_tp = len(time_vec)
 
     all_results = []
+    gap_accum = defaultdict(list)
     for subject, session in sessions:
         print(f"\n--- {subject} {session} ---")
         try:
             words_ses = words[(words['subject'] == subject) & (words['session'] == session)]
-            events = get_consensus_events(words_ses, conditions, args.align)
+            events, gaps = get_consensus_events(words_ses, conditions, args.align)
             counts = {k: len(v) for k, v in events.items()}
+            for k, g in gaps.items():
+                gap_accum[k].extend(g.tolist())
             print("  events: " + ", ".join(f"{k}={n}" for k, n in counts.items()))
 
             roi_ts = extract_roi_timeseries(subject, session)
@@ -390,9 +418,15 @@ def main():
             print(f"  SKIPPED: {e}")
 
     print(f"\nProcessed {len(all_results)} sessions")
+    # Mean current-word onset time (relative to lock) per condition, for the marker line
+    onset_lines = None
+    if args.align == 'offset':
+        onset_lines = {k: (float(np.mean(v)) if len(v) else np.nan)
+                       for k, v in gap_accum.items()}
     for key, label, _ in conditions:
         tot = sum(r[f'{key}_n'] for r in all_results)
-        print(f"  total {label}: {tot} events")
+        extra = (f", mean onset +{onset_lines[key]:.2f}s" if onset_lines else '')
+        print(f"  total {label}: {tot} events{extra}")
 
     # --- Per-subject aggregation (nanmean across sessions per ROI x condition) ---
     by_sub = defaultdict(list)
@@ -413,11 +447,11 @@ def main():
 
     print("\n--- Subject-level plots ---")
     for sub, data in sub_agg.items():
-        plot_subject_timecourse(sub, data, conditions, args.align, args.by)
+        plot_subject_timecourse(sub, data, conditions, args.align, args.by, onset_lines)
 
     if len(sub_agg) >= 2:
         print("\n--- Group-level plot ---")
-        plot_group_timecourse(sub_agg, conditions, args.align, args.by)
+        plot_group_timecourse(sub_agg, conditions, args.align, args.by, onset_lines)
 
     print("\n" + "=" * 64)
     print(f"DONE. Figures in {OUTPUT_DIR}")
