@@ -2,14 +2,21 @@
 Hippocampus Boundary-Locked Time Courses (whole / anterior / posterior)
 
 Group-average BOLD time courses in the hippocampus, locked to every type of
-cognitive/narrative boundary in the study. Onset-locked and offset-locked time
-courses are overlaid in the *same* subplot.
+cognitive/narrative boundary in the study. Figure: 3 ROI rows x 6 columns.
 
-Boundary types (columns):
-  svf     — Semantic verbal fluency trial boundary (category offset / next onset)
-  ahc     — Ad-hoc categories trial boundary (prompt offset / next onset)
-  movie   — FilmFest between-movie boundary (movie watching)
-  recall  — FilmFest between-movie boundary during free/cued recall
+Columns 1-4 — coarse task/narrative boundaries, ONSET-locked (t=0 = onset of the
+next unit). Because onset and offset are separated by an essentially fixed delay,
+the offset is drawn as a single dashed vertical marker rather than a second curve:
+  svf     — SVF trial boundary  (next category onset; prev. trial offset marked)
+  ahc     — AHC trial boundary  (next prompt onset;   prev. trial offset marked)
+  movie   — FilmFest between-movie boundary, watching (next movie onset)
+  recall  — FilmFest between-movie boundary, recall   (next recall onset)
+
+Columns 5-6 — fine within-trial production boundaries, OFFSET-locked (t=0 = the
+preceding unit's offset), two conditions overlaid:
+  svf_switch    — SVF, switch vs cluster, locked to the previous WORD offset
+  ahc_sentence  — AHC, across- vs within-explanation, locked to the previous
+                  SENTENCE offset
 
 ROIs (rows), all from the Harvard-Oxford subcortical hippocampus label, split
 along the MNI anterior-posterior (y) axis at the per-hemisphere median:
@@ -21,14 +28,13 @@ EFFICIENT EXTRACTION
 --------------------
 The three ROI time courses share a single hippocampus mask, so each BOLD run is
 loaded from disk exactly once and yields all three ROIs together (whole / ant /
-post), cached to one small .npz. Only masked voxels are materialised. Extraction
-across runs can be parallelised with --n_jobs; once cached, plotting is instant.
+post), cached to one small .npz. Only masked voxels are materialised. The fine
+within-trial columns reuse the same SVF/AHC caches. Extraction across runs can be
+parallelised with --n_jobs; once cached, plotting is instant.
 
 Usage:
     uv run python srcs/fmrianalysis/hippocampus_boundary_timecourse.py
-    uv run python srcs/fmrianalysis/hippocampus_boundary_timecourse.py --n_jobs 6
-    uv run python srcs/fmrianalysis/hippocampus_boundary_timecourse.py \
-        --boundary_types svf ahc movie
+    uv run python srcs/fmrianalysis/hippocampus_boundary_timecourse.py --n_jobs 8
 """
 import sys
 import argparse
@@ -63,6 +69,8 @@ from fmrianalysis.utils import (
 OUTPUT_DIR = FIGS_DIR / 'hippocampus_boundary_timecourse'
 CACHE_DIR = ANALYSIS_CACHE_DIR / 'hipp_ap'
 RECALL_DIR = DATA_DIR / 'filmfest_recall_timestamps'
+SVF_SWITCH_DIR = DATA_DIR / 'rec/svf_transition_ratings/source'
+AHC_SENT_DIR = DATA_DIR / 'rec/ahc_sentences'
 
 # Harvard-Oxford subcortical (maxprob thr25 2mm) hippocampus label indices
 # (verified: idx 9 = Left Hippocampus, idx 19 = Right Hippocampus)
@@ -71,18 +79,18 @@ HIPP_LABEL_L = 9
 HIPP_LABEL_R = 19
 
 # Peri-boundary window (seconds). t=0 = the boundary anchor.
-PRE_S = 15
+PRE_S = 18
 POST_S = 30
-TRS_BEFORE = int(round(PRE_S / TR))    # 10 TRs
+TRS_BEFORE = int(round(PRE_S / TR))    # 12 TRs
 TRS_AFTER = int(round(POST_S / TR))    # 20 TRs
 
-BOUNDARY_TYPES = ('svf', 'ahc', 'movie', 'recall')
-BOUNDARY_TITLE = {
-    'svf': 'Word Generation\n(SVF trial)',
-    'ahc': 'Explanation Generation\n(AHC trial)',
-    'movie': 'Movie Watching\n(between-movie)',
-    'recall': 'Movie Recall\n(between-movie)',
-}
+# WAV recordings start this many seconds before the fMRI scan; word/sentence
+# timestamps are in recording time and must be shifted to scanner time.
+SCANNER_START_OFFSET = 12.0
+
+# HRF onset shift for the filmfest onset alignment: skip the title card that
+# opens each movie so the "onset" reflects the new movie's content.
+TITLE_SCENE_OFFSET = 6.0
 
 # ROIs: (key, display_name)
 ROI_SPEC = [
@@ -91,24 +99,38 @@ ROI_SPEC = [
     ('post', 'Posterior hippocampus'),
 ]
 
-ALIGN_STYLE = {
-    'offset': dict(color='#d62728', label='Offset-locked'),
-    'onset': dict(color='#1f77b4', label='Onset-locked'),
-}
+# Column specification.
+#   kind='trial'  -> onset-locked single curve + dashed prev-offset marker
+#   kind='cond2'  -> offset-locked, two condition curves
+COLUMNS = [
+    dict(key='svf', kind='trial',
+         title='Word Generation\n(SVF trial)'),
+    dict(key='ahc', kind='trial',
+         title='Explanation Generation\n(AHC trial)'),
+    dict(key='movie', kind='trial',
+         title='Movie Watching\n(between-movie)'),
+    dict(key='recall', kind='trial',
+         title='Movie Recall\n(between-movie)'),
+    dict(key='svf_switch', kind='cond2',
+         title='Word Generation\n(switch vs cluster,\nprev-word offset)',
+         conds=[('switch', 'Switch', '#e74c3c'),
+                ('cluster', 'Cluster', '#7f7f7f')]),
+    dict(key='ahc_sentence', kind='cond2',
+         title='Explanation Generation\n(across vs within,\nprev-sentence offset)',
+         conds=[('Across', 'Across-explanation', '#e74c3c'),
+                ('Within', 'Within-explanation', '#7f7f7f')]),
+]
 
-# HRF onset shift for the filmfest onset alignment: skip the title card that
-# opens each movie so the "onset" reflects the new movie's content, matching
-# the convention used elsewhere in the project.
-TITLE_SCENE_OFFSET = 6.0
+ONSET_COLOR = '#1f77b4'
+OFFSET_MARKER_COLOR = '#555555'
 
 
 # ============================================================================
-# BOUNDARY EVENT COLLECTION
+# TRIAL / NARRATIVE BOUNDARY EVENTS (columns 1-4)
 # ============================================================================
 
 def get_movie_boundary_onsets(task):
-    """Movie-start times (s) of movies 2..N for a filmfest task (onset complement
-    of get_movie_boundary_offsets)."""
+    """Movie-start times (s) of movies 2..N for a filmfest task."""
     movies = [m for m in MOVIE_INFO if m['task'] == task]
     onsets = []
     for movie in movies[1:]:
@@ -121,86 +143,152 @@ def get_movie_boundary_onsets(task):
 
 def _parse_recall_tsv_filename(stem):
     parts = stem.split('_')
-    sub, ses = parts[0], parts[1]
-    task = '_'.join(parts[2:]).replace('task-', '')
-    return sub, ses, task
+    return parts[0], parts[1], '_'.join(parts[2:]).replace('task-', '')
 
 
-def get_recall_boundary_events(subject, align='offset'):
-    """[(session, task, [event_times_sec]), ...] for each recall TSV.
+def _recall_blocks(subject):
+    """[(session, task, block_end_times, block_start_times)] per recall TSV.
 
-    offset -> scanner_end of each contiguous movie block's last segment.
-    onset  -> scanner_start of each contiguous movie block's first segment.
-    """
+    A "block" is a contiguous run of segments for the same recalled movie; ends
+    and starts are scanner-relative seconds, chronological."""
     out = []
     for tsv in sorted(RECALL_DIR.glob(f'{subject}_*_desc-recallsegments.tsv')):
         stem = tsv.stem.replace('_desc-recallsegments', '')
         _, ses, task = _parse_recall_tsv_filename(stem)
         df = pd.read_csv(tsv, sep='\t')
         movies = df['movie'].values
-        events = []
-        if align == 'offset':
-            sc_end = df['scanner_end'].values
-            for i in range(len(df)):
-                if i == len(df) - 1 or movies[i] != movies[i + 1]:
-                    events.append(float(sc_end[i]))
-        else:
-            sc_start = df['scanner_start'].values
-            for i in range(len(df)):
-                if i == 0 or movies[i] != movies[i - 1]:
-                    events.append(float(sc_start[i]))
-        out.append((ses, task, events))
+        sc_start = df['scanner_start'].values
+        sc_end = df['scanner_end'].values
+        ends, starts = [], []
+        for i in range(len(df)):
+            if i == 0 or movies[i] != movies[i - 1]:
+                starts.append(float(sc_start[i]))
+            if i == len(df) - 1 or movies[i] != movies[i + 1]:
+                ends.append(float(sc_end[i]))
+        out.append((ses, task, ends, starts))
     return out
 
 
-def collect_subject_events(subject, btype):
-    """Return {'offset': [(ses,task,times)], 'onset': [(ses,task,times)]} for one
-    subject and boundary type. `times` are scan-relative seconds."""
-    events = {'offset': [], 'onset': []}
+def collect_trial_runs(subject, btype):
+    """Return [(session, task, onset_times, delays)] for one trial-boundary type.
 
+    onset_times : next-unit onset (scanner seconds), the anchor for the curve.
+    delays      : onset - previous offset, index-aligned (used to place the
+                  dashed offset marker)."""
+    runs = []
     if btype in ('svf', 'ahc'):
         for ses, task in discover_svf_ahc_sessions(subject):
             if task != btype:
                 continue
             onsets, offsets = get_trial_times(subject, ses, task)
             if len(offsets) >= 2:
-                # offset of trial i (exclude last: no trial follows)
-                events['offset'].append((ses, task, list(offsets[:-1])))
-                # onset of trial i+1 (exclude first: no boundary precedes it)
-                events['onset'].append((ses, task, list(onsets[1:])))
-
+                offs = np.asarray(offsets[:-1], float)   # end of trial i
+                ons = np.asarray(onsets[1:], float)       # start of trial i+1
+                runs.append((ses, task, ons, ons - offs))
     elif btype == 'movie':
         if subject in FILMFEST_SUBJECTS:
             ses = FILMFEST_SUBJECTS[subject]
             for task in ('filmfest1', 'filmfest2'):
-                off = get_movie_boundary_offsets(task)
-                on = [t + TITLE_SCENE_OFFSET for t in get_movie_boundary_onsets(task)]
-                if off:
-                    events['offset'].append((ses, task, off))
-                if on:
-                    events['onset'].append((ses, task, on))
-
+                offs = np.asarray(get_movie_boundary_offsets(task), float)
+                ons = np.asarray(get_movie_boundary_onsets(task), float) + TITLE_SCENE_OFFSET
+                runs.append((ses, task, ons, ons - offs))
     elif btype == 'recall':
         if subject in FILMFEST_SUBJECTS:
-            for align in ('offset', 'onset'):
-                for ses, task, times in get_recall_boundary_events(subject, align):
-                    if times:
-                        events[align].append((ses, task, times))
-
+            for ses, task, ends, starts in _recall_blocks(subject):
+                if len(ends) >= 2 and len(starts) >= 2:
+                    offs = np.asarray(ends[:-1], float)      # end of block i
+                    ons = np.asarray(starts[1:], float)      # start of block i+1
+                    runs.append((ses, task, ons, ons - offs))
     else:
-        raise ValueError(f'Unknown boundary type: {btype}')
+        raise ValueError(btype)
+    return runs
 
-    return events
+
+# ============================================================================
+# FINE WITHIN-TRIAL BOUNDARY EVENTS (columns 5-6), offset-locked
+# ============================================================================
+
+def parse_svf_switch(csv_path):
+    """SVF word events locked to the PRECEDING word offset (scanner seconds).
+
+    Mirrors svf_switch_boundary.get_events: drop 'next' words, drop depletion
+    switches (switch immediately after a switch or after 'next'). Returns a frame
+    with columns onset, trial_type in {'switch','cluster'}."""
+    df = pd.read_csv(csv_path).sort_values('start').reset_index(drop=True)
+    df['switch_flag'] = pd.to_numeric(df['switch_flag'], errors='coerce').fillna(0).astype(int)
+    df['preceding_end'] = df['end'].shift(1)
+    df['preceding_switch_flag'] = df['switch_flag'].shift(1)
+    df['preceding_word'] = df['transcription'].shift(1).astype(str).str.lower()
+
+    df = df[df['transcription'].astype(str).str.lower() != 'next'].copy()
+    is_switch = df['switch_flag'] == 1
+    prev_switch = df['preceding_switch_flag'] == 1
+    prev_next = df['preceding_word'] == 'next'
+    df = df[~(is_switch & (prev_switch | prev_next))].copy()
+
+    df['onset'] = df['preceding_end'] - SCANNER_START_OFFSET
+    df['trial_type'] = df['switch_flag'].map({1: 'switch', 0: 'cluster'})
+    df = df.dropna(subset=['onset'])
+    df = df[df['onset'] >= 0]
+    return df[['onset', 'trial_type']]
 
 
-def all_needed_runs(subjects, boundary_types):
-    """Union of (subject, session, task) tuples referenced by any boundary type."""
+def parse_ahc_sentences(xlsx_path):
+    """AHC sentence events locked to the PRECEDING sentence offset (End Time).
+
+    Mirrors ahc_across_vs_within_glm.get_events_dataframe: classify each sentence
+    as Across- vs Within-Possibility relative to the previous sentence of the same
+    prompt; drop the first sentence of each prompt. Returns onset, trial_type in
+    {'Across','Within'}."""
+    df = pd.read_excel(xlsx_path)
+    df.columns = df.columns.str.strip()
+    df['Prompt Number'] = df['Prompt Number'].ffill()
+    df = df.sort_values(['Prompt Number', 'Start Time']).reset_index(drop=True)
+    df['Preceding_Possibility'] = df.groupby('Prompt Number')['Possibility Number'].shift(1)
+    df['is_switch'] = df['Possibility Number'] != df['Preceding_Possibility']
+    df = df.dropna(subset=['Preceding_Possibility']).copy()
+    df['trial_type'] = df['is_switch'].map({True: 'Across', False: 'Within'})
+    df['onset'] = df['End Time'] - SCANNER_START_OFFSET
+    df = df[df['onset'] >= 0]
+    return df[['onset', 'trial_type']]
+
+
+def collect_cond2_runs(subject, btype):
+    """Return [(session, task, {cond: onset_times})] for a fine-boundary column."""
+    runs = []
+    if btype == 'svf_switch':
+        for csv in sorted(SVF_SWITCH_DIR.glob(
+                f'{subject}_ses-*_task-svf_desc-wordtimestampswithswitch.csv')):
+            ses = csv.stem.split('_')[1]
+            df = parse_svf_switch(csv)
+            runs.append((ses, 'svf', {
+                'switch': df.loc[df.trial_type == 'switch', 'onset'].values,
+                'cluster': df.loc[df.trial_type == 'cluster', 'onset'].values,
+            }))
+    elif btype == 'ahc_sentence':
+        for xlsx in sorted(AHC_SENT_DIR.glob(
+                f'{subject}_ses-*_task-ahc_desc-sentences.xlsx')):
+            ses = xlsx.stem.split('_')[1]
+            df = parse_ahc_sentences(xlsx)
+            runs.append((ses, 'ahc', {
+                'Across': df.loc[df.trial_type == 'Across', 'onset'].values,
+                'Within': df.loc[df.trial_type == 'Within', 'onset'].values,
+            }))
+    else:
+        raise ValueError(btype)
+    return runs
+
+
+def all_needed_runs(subjects, columns):
+    """Union of (subject, session, task) referenced by any column."""
     runs = set()
     for subject in subjects:
-        for btype in boundary_types:
-            ev = collect_subject_events(subject, btype)
-            for align in ('offset', 'onset'):
-                for ses, task, _ in ev[align]:
+        for col in columns:
+            if col['kind'] == 'trial':
+                for ses, task, _, _ in collect_trial_runs(subject, col['key']):
+                    runs.add((subject, ses, task))
+            else:
+                for ses, task, _ in collect_cond2_runs(subject, col['key']):
                     runs.add((subject, ses, task))
     return sorted(runs)
 
@@ -215,8 +303,8 @@ def _cache_path(subject, session, task):
 
 def _region_timecourse(vox):
     """Voxels (n_vox, T) -> region mean, high-passed and temporally z-scored (T,)."""
-    ts = vox.mean(axis=0).astype(np.float64)       # region mean signal
-    ts = highpass_filter(ts, order=2)              # 0.01 Hz high-pass
+    ts = vox.mean(axis=0).astype(np.float64)
+    ts = highpass_filter(ts, order=2)
     ts = sp_zscore(ts, nan_policy='omit')
     return np.nan_to_num(ts).astype(np.float32)
 
@@ -225,8 +313,7 @@ def extract_hipp_run(subject, session, task, force=False):
     """Extract whole/ant/post hippocampus time courses for one run (cached).
 
     Loads the BOLD volume exactly once and materialises only hippocampus voxels;
-    all three ROIs are derived from the same mask and saved together.
-    """
+    all three ROIs are derived from the same mask and saved together."""
     cache_file = _cache_path(subject, session, task)
     if cache_file.exists() and not force:
         return True
@@ -236,7 +323,6 @@ def extract_hipp_run(subject, session, task, force=False):
         print(f'  [skip] BOLD missing: {bold_path.name}')
         return False
 
-    # Atlas resampled to this BOLD's voxel grid (fetch cached on disk).
     ho_maps = datasets.fetch_atlas_harvard_oxford(HO_ATLAS)['maps']
     atlas_data = get_atlas_data(bold_path, ho_maps)     # (X, Y, Z) int
 
@@ -251,13 +337,9 @@ def extract_hipp_run(subject, session, task, force=False):
     data4d = np.asarray(img.dataobj, dtype=np.float32)  # (X, Y, Z, T)
 
     def _split(mask):
-        """Return (anterior_voxels, posterior_voxels) for a hemisphere mask.
-
-        (T, ) time series per voxel; split at the median MNI-y of the hemisphere's
-        hippocampus voxels (anterior = larger y)."""
-        ijk = np.argwhere(mask)                         # (n, 3), C-order
-        world_y = apply_affine(affine, ijk)[:, 1]       # MNI y (mm)
-        vox = data4d[mask]                              # (n, T), same C-order
+        ijk = np.argwhere(mask)                          # (n, 3), C-order
+        world_y = apply_affine(affine, ijk)[:, 1]        # MNI y (mm)
+        vox = data4d[mask]                               # (n, T), same C-order
         ant = world_y >= np.median(world_y)
         return vox[ant], vox[~ant]
 
@@ -297,25 +379,47 @@ def load_hipp_run(subject, session, task):
 # EPOCH AVERAGING
 # ============================================================================
 
-def subject_mean_timecourse(subject, btype, roi_key, align):
-    """Mean peri-boundary time course for one subject/boundary/ROI/alignment.
-
-    Pools epochs across all of the subject's runs, then averages. Returns
-    (mean_tc, n_epochs) or (None, 0)."""
-    events = collect_subject_events(subject, btype)
-    all_epochs = []
-    for ses, task, times in events[align]:
+def subject_trial_mean(subject, btype, roi_key):
+    """Onset-locked mean for one subject/trial-column/ROI -> (mean_tc, n_ev)."""
+    epochs = []
+    for ses, task, onsets, _ in collect_trial_runs(subject, btype):
         run = load_hipp_run(subject, ses, task)
         if run is None:
             continue
-        ep = extract_event_locked(run[roi_key], times, TRS_BEFORE, TRS_AFTER,
+        ep = extract_event_locked(run[roi_key], onsets, TRS_BEFORE, TRS_AFTER,
                                   return_epochs=True)
         if ep is not None:
-            all_epochs.append(ep)
-    if not all_epochs:
+            epochs.append(ep)
+    if not epochs:
         return None, 0
-    stacked = np.vstack(all_epochs)
+    stacked = np.vstack(epochs)
     return stacked.mean(axis=0), stacked.shape[0]
+
+
+def subject_cond2_mean(subject, btype, roi_key, cond):
+    """Offset-locked mean for one subject/fine-column/ROI/condition -> (tc, n)."""
+    epochs = []
+    for ses, task, cond_times in collect_cond2_runs(subject, btype):
+        run = load_hipp_run(subject, ses, task)
+        if run is None:
+            continue
+        ep = extract_event_locked(run[roi_key], cond_times[cond], TRS_BEFORE,
+                                  TRS_AFTER, return_epochs=True)
+        if ep is not None:
+            epochs.append(ep)
+    if not epochs:
+        return None, 0
+    stacked = np.vstack(epochs)
+    return stacked.mean(axis=0), stacked.shape[0]
+
+
+def _group(subj_means):
+    """List of (subject, tc) -> {'mean','sem','n_subj'} or None."""
+    if not subj_means:
+        return None
+    arr = np.vstack([m for _, m in subj_means])
+    return dict(mean=arr.mean(0), sem=arr.std(0) / np.sqrt(arr.shape[0]),
+                n_subj=arr.shape[0])
 
 
 # ============================================================================
@@ -323,78 +427,110 @@ def subject_mean_timecourse(subject, btype, roi_key, align):
 # ============================================================================
 
 def _time_axis():
-    return (np.arange(-TRS_BEFORE, TRS_AFTER + 1)) * TR
+    return np.arange(-TRS_BEFORE, TRS_AFTER + 1) * TR
 
 
-def make_figure(subjects, boundary_types):
-    n_rows = len(ROI_SPEC)
-    n_cols = len(boundary_types)
-    time = _time_axis()
+def compute_column(subjects, col):
+    """Return per-ROI curves for one column.
 
-    # group[roi][btype][align] = {'mean','sem','n_subj','n_epochs'}
-    group = {rk: {bt: {} for bt in boundary_types} for rk, _ in ROI_SPEC}
-
-    for rk, _ in ROI_SPEC:
-        for bt in boundary_types:
-            for align in ('offset', 'onset'):
-                subj_means, n_ep_total = [], 0
-                for subject in subjects:
-                    tc, n_ep = subject_mean_timecourse(subject, bt, rk, align)
+    trial: {roi: {'onset': grp, 'n_ev': int}}, plus col-level 'offset_marker'.
+    cond2: {roi: {cond_key: grp, 'n_ev_<cond>': int}}."""
+    out = {rk: {} for rk, _ in ROI_SPEC}
+    if col['kind'] == 'trial':
+        # mean prev-offset delay across all subjects' events -> marker position
+        delays = []
+        for s in subjects:
+            for _, _, _, d in collect_trial_runs(s, col['key']):
+                delays.extend(list(d))
+        offset_marker = -float(np.mean(delays)) if delays else None
+        for rk, _ in ROI_SPEC:
+            subj_means, n_ev = [], 0
+            for s in subjects:
+                tc, n = subject_trial_mean(s, col['key'], rk)
+                if tc is not None:
+                    subj_means.append((s, tc))
+                    n_ev += n
+            out[rk]['onset'] = _group(subj_means)
+            out[rk]['n_ev'] = n_ev
+        out['_offset_marker'] = offset_marker
+    else:
+        for rk, _ in ROI_SPEC:
+            for cond_key, _, _ in col['conds']:
+                subj_means, n_ev = [], 0
+                for s in subjects:
+                    tc, n = subject_cond2_mean(s, col['key'], rk, cond_key)
                     if tc is not None:
-                        subj_means.append(tc)
-                        n_ep_total += n_ep
-                if subj_means:
-                    arr = np.vstack(subj_means)
-                    group[rk][bt][align] = {
-                        'mean': arr.mean(axis=0),
-                        'sem': arr.std(axis=0) / np.sqrt(arr.shape[0]),
-                        'n_subj': arr.shape[0],
-                        'n_epochs': n_ep_total,
-                    }
+                        subj_means.append((s, tc))
+                        n_ev += n
+                out[rk][cond_key] = _group(subj_means)
+                out[rk][f'n_ev_{cond_key}'] = n_ev
+    return out
+
+
+def make_figure(subjects, columns):
+    time = _time_axis()
+    data = {col['key']: compute_column(subjects, col) for col in columns}
 
     # Shared y-limits across all subplots (project convention).
     ylo, yhi = np.inf, -np.inf
-    for rk, _ in ROI_SPEC:
-        for bt in boundary_types:
-            for align in ('offset', 'onset'):
-                g = group[rk][bt].get(align)
-                if g is None:
-                    continue
-                ylo = min(ylo, np.min(g['mean'] - g['sem']))
-                yhi = max(yhi, np.max(g['mean'] + g['sem']))
+    for col in columns:
+        for rk, _ in ROI_SPEC:
+            cell = data[col['key']][rk]
+            for v in cell.values():
+                if isinstance(v, dict) and 'mean' in v:
+                    ylo = min(ylo, np.min(v['mean'] - v['sem']))
+                    yhi = max(yhi, np.max(v['mean'] + v['sem']))
     if not np.isfinite(ylo):
         ylo, yhi = -1, 1
     pad = 0.08 * (yhi - ylo)
     ylo, yhi = ylo - pad, yhi + pad
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.6 * n_cols, 3.0 * n_rows),
+    n_rows, n_cols = len(ROI_SPEC), len(columns)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
                              squeeze=False, sharex=True, sharey=True)
     fig.suptitle('Hippocampus boundary-locked time courses (group mean ± SEM)',
-                 fontsize=14, fontweight='bold', y=0.99)
+                 fontsize=14, fontweight='bold', y=0.995)
 
     for r, (rk, rname) in enumerate(ROI_SPEC):
-        for c, bt in enumerate(boundary_types):
+        for c, col in enumerate(columns):
             ax = axes[r][c]
-            ax.axvline(0, color='k', lw=1.0, ls='--', alpha=0.7)
+            cell = data[col['key']][rk]
             ax.axhline(0, color='gray', lw=0.6, alpha=0.5)
-            for align in ('offset', 'onset'):
-                g = group[rk][bt].get(align)
-                if g is None:
-                    continue
-                st = ALIGN_STYLE[align]
-                ax.plot(time, g['mean'], color=st['color'], lw=1.8,
-                        label=f"{st['label']} (N={g['n_subj']}, {g['n_epochs']} ev)")
-                ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
-                                color=st['color'], alpha=0.2, lw=0)
+            ax.axvline(0, color='k', lw=1.0, ls='-', alpha=0.7)
+
+            if col['kind'] == 'trial':
+                g = cell.get('onset')
+                if g is not None:
+                    ax.plot(time, g['mean'], color=ONSET_COLOR, lw=1.8,
+                            label=f"Onset-locked (N={g['n_subj']}, {cell['n_ev']} ev)")
+                    ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
+                                    color=ONSET_COLOR, alpha=0.2, lw=0)
+                marker = data[col['key']].get('_offset_marker')
+                if marker is not None and time[0] <= marker <= time[-1]:
+                    ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
+                               alpha=0.9, label=f'Prev. offset (≈{marker:.0f}s)')
+            else:
+                for cond_key, cond_label, cond_color in col['conds']:
+                    g = cell.get(cond_key)
+                    if g is None:
+                        continue
+                    n_ev = cell.get(f'n_ev_{cond_key}', 0)
+                    ax.plot(time, g['mean'], color=cond_color, lw=1.8,
+                            label=f"{cond_label} (N={g['n_subj']}, {n_ev} ev)")
+                    ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
+                                    color=cond_color, alpha=0.2, lw=0)
+
             ax.set_ylim(ylo, yhi)
             ax.set_xlim(time[0], time[-1])
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
             if r == 0:
-                ax.set_title(BOUNDARY_TITLE[bt], fontsize=10, fontweight='bold')
+                ax.set_title(col['title'], fontsize=9, fontweight='bold')
             if c == 0:
                 ax.set_ylabel(f'{rname}\nBOLD (z)', fontsize=9)
             if r == n_rows - 1:
                 ax.set_xlabel('Time rel. boundary (s)', fontsize=9)
-            ax.legend(fontsize=6, loc='upper right', framealpha=0.7)
+            ax.legend(fontsize=5.5, loc='upper right', framealpha=0.6)
             ax.tick_params(labelsize=8)
 
     fig.tight_layout(rect=[0, 0, 1, 0.97])
@@ -403,7 +539,7 @@ def make_figure(subjects, boundary_types):
     fig.savefig(out, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f'\nSaved figure -> {out}')
-    return group
+    return data
 
 
 # ============================================================================
@@ -413,27 +549,23 @@ def make_figure(subjects, boundary_types):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--boundary_types', nargs='+', default=list(BOUNDARY_TYPES),
-                    choices=list(BOUNDARY_TYPES))
     ap.add_argument('--n_jobs', type=int, default=1,
                     help='Parallelism for the one-time extraction pre-pass')
     ap.add_argument('--force', action='store_true',
                     help='Re-extract hippocampus time courses even if cached')
     args = ap.parse_args()
 
-    boundary_types = args.boundary_types
     subjects = list(SUBJECT_IDS)
 
     print('=' * 64)
     print('HIPPOCAMPUS BOUNDARY-LOCKED TIME COURSES')
-    print(f'Boundary types : {boundary_types}')
-    print(f'ROIs           : {[k for k, _ in ROI_SPEC]}')
-    print(f'Window         : -{PRE_S}s .. +{POST_S}s  '
-          f'({TRS_BEFORE} + 1 + {TRS_AFTER} TRs)')
+    print(f'Columns : {[c["key"] for c in COLUMNS]}')
+    print(f'ROIs    : {[k for k, _ in ROI_SPEC]}')
+    print(f'Window  : -{PRE_S}s .. +{POST_S}s  ({TRS_BEFORE} + 1 + {TRS_AFTER} TRs)')
     print('=' * 64)
 
     # ---- Extraction pre-pass (cached; one BOLD load per run -> 3 ROIs) ----
-    runs = all_needed_runs(subjects, boundary_types)
+    runs = all_needed_runs(subjects, COLUMNS)
     todo = [r for r in runs if args.force or not _cache_path(*r).exists()]
     print(f'\nRuns referenced: {len(runs)}   needing extraction: {len(todo)}')
     if todo:
@@ -446,7 +578,7 @@ def main():
                 extract_hipp_run(s, ses, t, args.force)
 
     # ---- Figure ----
-    make_figure(subjects, boundary_types)
+    make_figure(subjects, COLUMNS)
     print('\nDONE.')
 
 
