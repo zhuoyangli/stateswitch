@@ -78,11 +78,13 @@ HO_ATLAS = 'sub-maxprob-thr25-2mm'
 HIPP_LABEL_L = 9
 HIPP_LABEL_R = 19
 
-# Peri-boundary window (seconds). t=0 = the boundary anchor.
-PRE_S = 18
-POST_S = 30
-TRS_BEFORE = int(round(PRE_S / TR))    # 12 TRs
-TRS_AFTER = int(round(POST_S / TR))    # 20 TRs
+# Peri-boundary windows (seconds), t=0 = anchor. The coarse task/narrative
+# boundaries (columns 1-4) use a wider window than the fine within-trial
+# boundaries (columns 5-6).
+TRIAL_PRE_S, TRIAL_POST_S = 30, 45
+COND2_PRE_S, COND2_POST_S = 18, 30
+TRIAL_WIN = (int(round(TRIAL_PRE_S / TR)), int(round(TRIAL_POST_S / TR)))  # (20, 30)
+COND2_WIN = (int(round(COND2_PRE_S / TR)), int(round(COND2_POST_S / TR)))  # (12, 20)
 
 # WAV recordings start this many seconds before the fMRI scan; word/sentence
 # timestamps are in recording time and must be shifted to scanner time.
@@ -103,19 +105,19 @@ ROI_SPEC = [
 #   kind='trial'  -> onset-locked single curve + dashed prev-offset marker
 #   kind='cond2'  -> offset-locked, two condition curves
 COLUMNS = [
-    dict(key='svf', kind='trial',
+    dict(key='svf', kind='trial', win=TRIAL_WIN,
          title='Word Generation\n(SVF trial)'),
-    dict(key='ahc', kind='trial',
+    dict(key='ahc', kind='trial', win=TRIAL_WIN,
          title='Explanation Generation\n(AHC trial)'),
-    dict(key='movie', kind='trial',
+    dict(key='movie', kind='trial', win=TRIAL_WIN,
          title='Movie Watching\n(between-movie)'),
-    dict(key='recall', kind='trial',
+    dict(key='recall', kind='trial', win=TRIAL_WIN,
          title='Movie Recall\n(between-movie)'),
-    dict(key='svf_switch', kind='cond2',
+    dict(key='svf_switch', kind='cond2', win=COND2_WIN,
          title='Word Generation\n(switch vs cluster,\nprev-word offset)',
          conds=[('switch', 'Switch', '#e74c3c'),
                 ('cluster', 'Cluster', '#7f7f7f')]),
-    dict(key='ahc_sentence', kind='cond2',
+    dict(key='ahc_sentence', kind='cond2', win=COND2_WIN,
          title='Explanation Generation\n(across vs within,\nprev-sentence offset)',
          conds=[('Across', 'Across-explanation', '#e74c3c'),
                 ('Within', 'Within-explanation', '#7f7f7f')]),
@@ -379,14 +381,15 @@ def load_hipp_run(subject, session, task):
 # EPOCH AVERAGING
 # ============================================================================
 
-def subject_trial_mean(subject, btype, roi_key):
+def subject_trial_mean(subject, btype, roi_key, win):
     """Onset-locked mean for one subject/trial-column/ROI -> (mean_tc, n_ev)."""
+    tb, ta = win
     epochs = []
     for ses, task, onsets, _ in collect_trial_runs(subject, btype):
         run = load_hipp_run(subject, ses, task)
         if run is None:
             continue
-        ep = extract_event_locked(run[roi_key], onsets, TRS_BEFORE, TRS_AFTER,
+        ep = extract_event_locked(run[roi_key], onsets, tb, ta,
                                   return_epochs=True)
         if ep is not None:
             epochs.append(ep)
@@ -396,15 +399,16 @@ def subject_trial_mean(subject, btype, roi_key):
     return stacked.mean(axis=0), stacked.shape[0]
 
 
-def subject_cond2_mean(subject, btype, roi_key, cond):
+def subject_cond2_mean(subject, btype, roi_key, cond, win):
     """Offset-locked mean for one subject/fine-column/ROI/condition -> (tc, n)."""
+    tb, ta = win
     epochs = []
     for ses, task, cond_times in collect_cond2_runs(subject, btype):
         run = load_hipp_run(subject, ses, task)
         if run is None:
             continue
-        ep = extract_event_locked(run[roi_key], cond_times[cond], TRS_BEFORE,
-                                  TRS_AFTER, return_epochs=True)
+        ep = extract_event_locked(run[roi_key], cond_times[cond], tb, ta,
+                                  return_epochs=True)
         if ep is not None:
             epochs.append(ep)
     if not epochs:
@@ -426,8 +430,9 @@ def _group(subj_means):
 # FIGURE
 # ============================================================================
 
-def _time_axis():
-    return np.arange(-TRS_BEFORE, TRS_AFTER + 1) * TR
+def _time_axis(win):
+    tb, ta = win
+    return np.arange(-tb, ta + 1) * TR
 
 
 def compute_column(subjects, col):
@@ -435,6 +440,7 @@ def compute_column(subjects, col):
 
     trial: {roi: {'onset': grp, 'n_ev': int}}, plus col-level 'offset_marker'.
     cond2: {roi: {cond_key: grp, 'n_ev_<cond>': int}}."""
+    win = col['win']
     out = {rk: {} for rk, _ in ROI_SPEC}
     if col['kind'] == 'trial':
         # mean prev-offset delay across all subjects' events -> marker position
@@ -446,7 +452,7 @@ def compute_column(subjects, col):
         for rk, _ in ROI_SPEC:
             subj_means, n_ev = [], 0
             for s in subjects:
-                tc, n = subject_trial_mean(s, col['key'], rk)
+                tc, n = subject_trial_mean(s, col['key'], rk, win)
                 if tc is not None:
                     subj_means.append((s, tc))
                     n_ev += n
@@ -458,7 +464,7 @@ def compute_column(subjects, col):
             for cond_key, _, _ in col['conds']:
                 subj_means, n_ev = [], 0
                 for s in subjects:
-                    tc, n = subject_cond2_mean(s, col['key'], rk, cond_key)
+                    tc, n = subject_cond2_mean(s, col['key'], rk, cond_key, win)
                     if tc is not None:
                         subj_means.append((s, tc))
                         n_ev += n
@@ -468,7 +474,7 @@ def compute_column(subjects, col):
 
 
 def make_figure(subjects, columns):
-    time = _time_axis()
+    times = {col['key']: _time_axis(col['win']) for col in columns}
     data = {col['key']: compute_column(subjects, col) for col in columns}
 
     # Shared y-limits across all subplots (project convention).
@@ -486,14 +492,17 @@ def make_figure(subjects, columns):
     ylo, yhi = ylo - pad, yhi + pad
 
     n_rows, n_cols = len(ROI_SPEC), len(columns)
+    # Independent x-axes (coarse boundaries use a wider window than the fine
+    # within-trial ones); y shared across all panels.
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
-                             squeeze=False, sharex=True, sharey=True)
+                             squeeze=False, sharex=False, sharey=True)
     fig.suptitle('Hippocampus boundary-locked time courses (group mean ± SEM)',
                  fontsize=14, fontweight='bold', y=0.995)
 
     for r, (rk, rname) in enumerate(ROI_SPEC):
         for c, col in enumerate(columns):
             ax = axes[r][c]
+            time = times[col['key']]
             cell = data[col['key']][rk]
             ax.axhline(0, color='gray', lw=0.6, alpha=0.5)
             ax.axvline(0, color='k', lw=1.0, ls='-', alpha=0.7)
@@ -530,6 +539,8 @@ def make_figure(subjects, columns):
                 ax.set_ylabel(f'{rname}\nBOLD (z)', fontsize=9)
             if r == n_rows - 1:
                 ax.set_xlabel('Time rel. boundary (s)', fontsize=9)
+            else:
+                ax.tick_params(labelbottom=False)
             ax.legend(fontsize=5.5, loc='upper right', framealpha=0.6)
             ax.tick_params(labelsize=8)
 
@@ -561,7 +572,8 @@ def main():
     print('HIPPOCAMPUS BOUNDARY-LOCKED TIME COURSES')
     print(f'Columns : {[c["key"] for c in COLUMNS]}')
     print(f'ROIs    : {[k for k, _ in ROI_SPEC]}')
-    print(f'Window  : -{PRE_S}s .. +{POST_S}s  ({TRS_BEFORE} + 1 + {TRS_AFTER} TRs)')
+    print(f'Windows : trial -{TRIAL_PRE_S}..+{TRIAL_POST_S}s, '
+          f'fine -{COND2_PRE_S}..+{COND2_POST_S}s')
     print('=' * 64)
 
     # ---- Extraction pre-pass (cached; one BOLD load per run -> 3 ROIs) ----
