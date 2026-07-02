@@ -71,6 +71,8 @@ CACHE_DIR = ANALYSIS_CACHE_DIR / 'hipp_ap'
 RECALL_DIR = DATA_DIR / 'filmfest_recall_timestamps'
 SVF_SWITCH_DIR = DATA_DIR / 'rec/svf_transition_ratings/source'
 AHC_SENT_DIR = DATA_DIR / 'rec/ahc_sentences'
+BOUNDARY_STRENGTH_CSV = ANNOTATIONS_DIR / 'filmfest_boundary_strength.csv'
+FILMFEST_RUN1_LEN_TR = 996   # TRs in filmfest1 (concat offset for filmfest2)
 
 # Harvard-Oxford subcortical (maxprob thr25 2mm) hippocampus label indices
 # (verified: idx 9 = Left Hippocampus, idx 19 = Right Hippocampus)
@@ -113,6 +115,8 @@ COLUMNS = [
          title='Movie Watching\n(between-movie)'),
     dict(key='recall', kind='trial', win=TRIAL_WIN,
          title='Movie Recall\n(between-movie)'),
+    dict(key='within_movie', kind='trial', win=TRIAL_WIN,
+         title='Movie Watching\n(within-movie\nevent boundary)'),
     dict(key='svf_switch', kind='cond2', win=COND2_WIN,
          title='Word Generation\n(switch vs cluster,\nprev-word offset)',
          conds=[('switch', 'Switch', '#e74c3c'),
@@ -143,6 +147,26 @@ def get_movie_boundary_onsets(task):
         first_start = segb['Start Time (m.ss)'].values[0]
         onsets.append(mss_to_seconds(first_start))
     return onsets
+
+
+def get_within_movie_boundaries(task):
+    """Strong, fMRI-retained within-movie event boundaries for a filmfest run.
+
+    Returns run-relative seconds (RAW — no HRF pre-shift — so the boundary sits at
+    t=0 and the BOLD response lags naturally, matching the other columns)."""
+    df = pd.read_csv(BOUNDARY_STRENGTH_CSV)
+    movie_ids = [1, 2, 3, 4, 5] if task == 'filmfest1' else [6, 7, 8, 9, 10]
+    d = df[(df['movie'].isin(movie_ids)) &
+           (df['retained_for_fmri'] == 1) &
+           (df['boundary_type'] == 'strong')].copy()
+    d['run_rel_TR'] = d['concat_TR']
+    if task == 'filmfest2':
+        d['run_rel_TR'] -= FILMFEST_RUN1_LEN_TR
+    # Denoise each movie's run onset, then place the boundary at onset + timestamp.
+    d['movie_onset_run_TR'] = d['run_rel_TR'] - d['timestamp_sec'] / TR
+    onset_TR = d.groupby('movie')['movie_onset_run_TR'].mean()
+    run_rel_sec = onset_TR[d['movie'].values].values * TR + d['timestamp_sec'].values
+    return sorted(run_rel_sec)
 
 
 def _parse_recall_tsv_filename(stem):
@@ -196,6 +220,13 @@ def collect_trial_runs(subject, btype):
                 offs = np.asarray(get_movie_boundary_offsets(task), float)
                 ons = np.asarray(get_movie_boundary_onsets(task), float) + TITLE_SCENE_OFFSET
                 runs.append((ses, task, ons, ons - offs))
+    elif btype == 'within_movie':
+        if subject in FILMFEST_SUBJECTS:
+            ses = FILMFEST_SUBJECTS[subject]
+            for task in ('filmfest1', 'filmfest2'):
+                bnd = np.asarray(get_within_movie_boundaries(task), float)
+                # Single boundary events (no onset/offset pair) -> no offset marker.
+                runs.append((ses, task, bnd, np.array([])))
     elif btype == 'recall':
         if subject in FILMFEST_SUBJECTS:
             for ses, task, ends, starts in _recall_blocks(subject):
@@ -390,12 +421,12 @@ def load_hipp_run(subject, session, task):
 # EPOCH AVERAGING
 # ============================================================================
 
-def subject_trial_mean(subject, btype, roi_key, win):
+def subject_trial_mean(subject, btype, roi_key, win, load_run):
     """Onset-locked mean for one subject/trial-column/ROI -> (mean_tc, n_ev)."""
     tb, ta = win
     epochs = []
     for ses, task, onsets, _ in collect_trial_runs(subject, btype):
-        run = load_hipp_run(subject, ses, task)
+        run = load_run(subject, ses, task)
         if run is None:
             continue
         ep = extract_event_locked(run[roi_key], onsets, tb, ta,
@@ -408,12 +439,12 @@ def subject_trial_mean(subject, btype, roi_key, win):
     return stacked.mean(axis=0), stacked.shape[0]
 
 
-def subject_cond2_mean(subject, btype, roi_key, cond, win):
+def subject_cond2_mean(subject, btype, roi_key, cond, win, load_run):
     """Offset-locked mean for one subject/fine-column/ROI/condition -> (tc, n)."""
     tb, ta = win
     epochs = []
     for ses, task, cond_times, _cur in collect_cond2_runs(subject, btype):
-        run = load_hipp_run(subject, ses, task)
+        run = load_run(subject, ses, task)
         if run is None:
             continue
         ep = extract_event_locked(run[roi_key], cond_times[cond], tb, ta,
@@ -444,13 +475,13 @@ def _time_axis(win):
     return np.arange(-tb, ta + 1) * TR
 
 
-def compute_column(subjects, col):
+def compute_column(subjects, col, roi_spec, load_run):
     """Return per-ROI curves for one column.
 
     trial: {roi: {'onset': grp, 'n_ev': int}}, plus col-level 'offset_marker'.
     cond2: {roi: {cond_key: grp, 'n_ev_<cond>': int}}."""
     win = col['win']
-    out = {rk: {} for rk, _ in ROI_SPEC}
+    out = {rk: {} for rk, _ in roi_spec}
     if col['kind'] == 'trial':
         # mean prev-offset delay across all subjects' events -> marker position
         delays = []
@@ -458,10 +489,10 @@ def compute_column(subjects, col):
             for _, _, _, d in collect_trial_runs(s, col['key']):
                 delays.extend(list(d))
         offset_marker = -float(np.mean(delays)) if delays else None
-        for rk, _ in ROI_SPEC:
+        for rk, _ in roi_spec:
             subj_means, n_ev = [], 0
             for s in subjects:
-                tc, n = subject_trial_mean(s, col['key'], rk, win)
+                tc, n = subject_trial_mean(s, col['key'], rk, win, load_run)
                 if tc is not None:
                     subj_means.append((s, tc))
                     n_ev += n
@@ -476,11 +507,11 @@ def compute_column(subjects, col):
             for _, _, _cond, cur in collect_cond2_runs(s, col['key']):
                 cur_rels.extend(list(cur))
         out['_onset_marker'] = float(np.nanmean(cur_rels)) if cur_rels else None
-        for rk, _ in ROI_SPEC:
+        for rk, _ in roi_spec:
             for cond_key, _, _ in col['conds']:
                 subj_means, n_ev = [], 0
                 for s in subjects:
-                    tc, n = subject_cond2_mean(s, col['key'], rk, cond_key, win)
+                    tc, n = subject_cond2_mean(s, col['key'], rk, cond_key, win, load_run)
                     if tc is not None:
                         subj_means.append((s, tc))
                         n_ev += n
@@ -489,9 +520,11 @@ def compute_column(subjects, col):
     return out
 
 
-def make_figure(subjects, columns):
+def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
+                fine_ylim=(-0.5, 0.5)):
     times = {col['key']: _time_axis(col['win']) for col in columns}
-    data = {col['key']: compute_column(subjects, col) for col in columns}
+    data = {col['key']: compute_column(subjects, col, roi_spec, load_run)
+            for col in columns}
 
     # Two shared y-scales: the coarse-boundary columns (individual-subject lines)
     # share one range bounded to those lines; the fine within-trial columns share
@@ -500,7 +533,7 @@ def make_figure(subjects, columns):
     for col in columns:
         if col['kind'] != 'trial':
             continue
-        for rk, _ in ROI_SPEC:
+        for rk, _ in roi_spec:
             for _, tc in data[col['key']][rk].get('subjects', []):
                 ylo = min(ylo, float(np.min(tc)))
                 yhi = max(yhi, float(np.max(tc)))
@@ -508,19 +541,17 @@ def make_figure(subjects, columns):
         ylo, yhi = -1, 1
     pad = 0.08 * (yhi - ylo)
     ylo, yhi = ylo - pad, yhi + pad
-    FINE_YLIM = (-0.5, 0.5)
+    FINE_YLIM = fine_ylim
 
-    n_rows, n_cols = len(ROI_SPEC), len(columns)
+    n_rows, n_cols = len(roi_spec), len(columns)
     first_fine = next((i for i, c in enumerate(columns) if c['kind'] != 'trial'), None)
     # Independent x-axes (coarse boundaries use a wider window than the fine
     # within-trial ones); y shared within each column group, not across groups.
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
                              squeeze=False, sharex=False, sharey=False)
-    fig.suptitle('Hippocampus boundary-locked time courses '
-                 '(coarse: subjects + black group mean; fine: mean ± SEM)',
-                 fontsize=13, fontweight='bold', y=0.995)
+    fig.suptitle(title, fontsize=13, fontweight='bold', y=0.995)
 
-    for r, (rk, rname) in enumerate(ROI_SPEC):
+    for r, (rk, rname) in enumerate(roi_spec):
         for c, col in enumerate(columns):
             ax = axes[r][c]
             time = times[col['key']]
@@ -584,11 +615,10 @@ def make_figure(subjects, columns):
                fontsize=8, frameon=False)
 
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUTPUT_DIR / 'hippocampus_boundary_timecourse.png'
-    fig.savefig(out, dpi=300, bbox_inches='tight')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print(f'\nSaved figure -> {out}')
+    print(f'\nSaved figure -> {out_path}')
     return data
 
 
@@ -629,7 +659,11 @@ def main():
                 extract_hipp_run(s, ses, t, args.force)
 
     # ---- Figure ----
-    make_figure(subjects, COLUMNS)
+    make_figure(
+        subjects, COLUMNS, ROI_SPEC, load_hipp_run,
+        title='Hippocampus boundary-locked time courses '
+              '(coarse: subjects + black group mean; fine: mean ± SEM)',
+        out_path=OUTPUT_DIR / 'hippocampus_boundary_timecourse.png')
     print('\nDONE.')
 
 
