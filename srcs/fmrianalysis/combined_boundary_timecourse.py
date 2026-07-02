@@ -1,11 +1,12 @@
 """
-Combined Boundary-Locked Time Courses across all four ROIs.
+Combined Boundary-Locked Time Courses across all ROIs.
 
-One figure, 4 ROI rows x 7 columns, in the shared hippocampus/dACC/TPJ/PHG style:
-  row 1 — Hippocampus (whole, Harvard-Oxford subcortical)
-  row 2 — dACC (Neurosynth "dacc" volume ROI)
-  row 3 — TPJ (Neurosynth "tpj" volume ROI)
-  row 4 — Parahippocampal gyrus (Neurosynth "parahippocampal gyrus" volume ROI)
+One figure, 5 ROI rows x 7 columns, in the shared style (row order below):
+  row 1 — PMC (Schaefer DefaultA pCunPCC parcels)
+  row 2 — Hippocampus (whole, Harvard-Oxford subcortical)
+  row 3 — Parahippocampal gyrus (Neurosynth "parahippocampal gyrus" volume ROI)
+  row 4 — dACC (Neurosynth "dacc" volume ROI)
+  row 5 — TPJ (Neurosynth "tpj" volume ROI)
 
 Reuses the column definitions and plotting machinery from
 `hippocampus_boundary_timecourse`. A single combined loader returns all four ROI
@@ -32,23 +33,27 @@ import hippocampus_boundary_timecourse as B
 import dacc_boundary_timecourse as D
 import tpj_boundary_timecourse as T
 import phg_boundary_timecourse as P
+import pmc_boundary_timecourse as M
 
 OUTPUT_DIR = FIGS_DIR / 'boundary_timecourse'
 
-# (key, display_name) — one row per ROI. Keys match those returned by load_all.
+# (key, display_name) — one row per ROI, in the requested order:
+# PMC, hippocampus, parahippocampal gyrus, dACC, TPJ.
 ROI_SPEC = [
+    ('pmc', 'PMC (Schaefer)'),
     ('whole', 'Hippocampus'),
+    ('phg', 'Parahippocampal g.\n(Neurosynth)'),
     ('dacc', 'dACC (Neurosynth)'),
     ('tpj', 'TPJ (Neurosynth)'),
-    ('phg', 'Parahippocampal g.\n(Neurosynth)'),
 ]
 
 # Each ROI's per-run loader and the key it returns.
 _LOADERS = [
+    (M.load_pmc_run, 'pmc'),
     (B.load_hipp_run, 'whole'),
+    (P.load_phg_run, 'phg'),
     (D.load_dacc_run, 'dacc'),
     (T.load_tpj_run, 'tpj'),
-    (P.load_phg_run, 'phg'),
 ]
 
 
@@ -66,6 +71,7 @@ def _extract_all(subjects, n_jobs, force):
     """Ensure every per-ROI cache exists for all referenced runs."""
     runs = B.all_needed_runs(subjects, B.COLUMNS)
     jobs = [
+        (M.extract_pmc_run, M._cache_path),
         (B.extract_hipp_run, B._cache_path),
         (D.extract_dacc_run, D._cache_path),
         (T.extract_tpj_run, T._cache_path),
@@ -98,7 +104,7 @@ def main():
     subjects = list(SUBJECT_IDS)
 
     print('=' * 64)
-    print('COMBINED BOUNDARY-LOCKED TIME COURSES (4 ROIs)')
+    print(f'COMBINED BOUNDARY-LOCKED TIME COURSES ({len(ROI_SPEC)} ROIs)')
     print(f'ROIs    : {[k for k, _ in ROI_SPEC]}')
     print(f'Columns : {[c["key"] for c in B.COLUMNS]}')
     print('=' * 64)
