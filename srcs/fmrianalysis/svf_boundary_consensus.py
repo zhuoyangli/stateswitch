@@ -18,6 +18,9 @@ Two grouping modes (--by):
 Word times in the CSV are transcript-recording seconds; scan-relative time =
     t - SCANNER_START_OFFSET (12.0 s).
 
+Hippocampus is split into anterior/posterior along the MNI y-axis (y = -21 mm,
+Poppenk 2013) from the Harvard-Oxford mask, processed to match get_parcel_data.
+
 Alignment (--align):
   offset (default) : lock to the offset (`end`) of the preceding word within the
                      same category (the moment just before the transition).
@@ -40,13 +43,17 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib import cm
 from scipy import stats
 
+import nibabel as nib
+from nilearn import datasets, image
+from nilearn.maskers import NiftiLabelsMasker
+
 # === CONFIG ===
-from configs.config import FIGS_DIR, DERIVATIVES_DIR, TR
+from configs.config import FIGS_DIR, DERIVATIVES_DIR, CACHE_DIR, TR
 from configs.schaefer_rois import (
     ANGULAR_GYRUS, EARLY_AUDITORY, EARLY_VISUAL, POSTERIOR_MEDIAL,
     DLPFC, VLPFC, DACC,
 )
-from fmrianalysis.utils import get_parcel_data
+from fmrianalysis.utils import get_parcel_data, get_bold_path
 
 WORD_SCORES = FIGS_DIR / 'behavior' / 'svf_transition_irr' / 'svf_transition_word_scores.csv'
 OUTPUT_DIR = FIGS_DIR / 'svf_boundary_consensus'
@@ -55,6 +62,7 @@ OUTPUT_DIR = FIGS_DIR / 'svf_boundary_consensus'
 SCANNER_START_OFFSET = 12.0
 TRS_BEFORE = 4          # 6 s pre
 TRS_AFTER = 12          # 18 s post
+HIPP_Y_SPLIT = -21.0    # MNI y (mm) anterior/posterior hippocampus boundary (Poppenk 2013)
 
 # === STYLE ===
 LABEL_FS = 12
@@ -62,7 +70,8 @@ TITLE_FS = 14
 
 ROI_SPEC = [
     ('pmc',   'Posterior Medial Cortex'),
-    ('hipp',  'Hippocampus'),
+    ('ahipp', 'Anterior Hippocampus'),
+    ('phipp', 'Posterior Hippocampus'),
     ('ag',    'Angular Gyrus'),
     ('dlpfc', 'dlPFC'),
     ('vlpfc', 'vlPFC'),
@@ -79,7 +88,6 @@ EVC_LABELS   = EARLY_VISUAL.get('left_labels', []) + EARLY_VISUAL.get('right_lab
 DLPFC_LABELS = DLPFC.get('left_labels', []) + DLPFC.get('right_labels', [])
 VLPFC_LABELS = VLPFC.get('left_labels', []) + VLPFC.get('right_labels', [])
 DACC_LABELS  = DACC.get('left_labels', []) + DACC.get('right_labels', [])
-HIPP_KEYWORDS = ['hippocampus']
 
 # 3-way consensus_class palette (matches svf_transition_consensus.py band colors)
 CLASS_CONDITIONS = [
@@ -175,15 +183,69 @@ def _avg_labels(parcel_dict, label_list):
     return np.column_stack(ts).mean(axis=1)
 
 
-def _avg_keywords(parcel_dict, keywords):
-    ts = [v for l, v in parcel_dict.items()
-          if l != 'Background' and any(kw in l.lower() for kw in keywords)]
-    return np.column_stack(ts).mean(axis=1)
+_HO_SUB = None
+
+
+def _ho_sub_atlas():
+    global _HO_SUB
+    if _HO_SUB is None:
+        _HO_SUB = datasets.fetch_atlas_harvard_oxford('sub-maxprob-thr25-2mm')
+    return _HO_SUB
+
+
+def extract_hipp_ap(subject, session, task='svf', y_split=HIPP_Y_SPLIT):
+    """Anterior/posterior hippocampus (L+R) mean BOLD, split at MNI y=y_split.
+
+    Splits the Harvard-Oxford hippocampus mask along the MNI anterior-posterior
+    axis and averages each sub-region with the SAME processing as get_parcel_data
+    (region mean -> high-pass 0.01 Hz -> z-score) via a 2-label NiftiLabelsMasker.
+    Returns {'ahipp': 1D ts, 'phipp': 1D ts}.
+    """
+    cache = (CACHE_DIR / 'parcels' /
+             f'{subject}_{session}_task-{task}_hippAP-y{y_split:g}.npz')
+    if cache.exists():
+        d = np.load(cache)
+        return {'ahipp': d['ahipp'], 'phipp': d['phipp']}
+
+    bold_path = get_bold_path(subject, session, task)
+    if not bold_path.exists():
+        raise FileNotFoundError(f"BOLD file not found: {bold_path}")
+
+    ho = _ho_sub_atlas()
+    labs = [l.decode() if hasattr(l, 'decode') else str(l) for l in ho['labels']]
+    hipp_ids = [i for i, l in enumerate(labs) if 'hippocampus' in l.lower()]
+    ho_img = nib.load(ho['maps']) if isinstance(ho['maps'], str) else ho['maps']
+    hipp_mask_img = nib.Nifti1Image(
+        np.isin(ho_img.get_fdata().astype(int), hipp_ids).astype(np.int8),
+        ho_img.affine, ho_img.header)
+
+    # Resample the mask to the subject's BOLD grid, then split by MNI y.
+    ref = image.index_img(str(bold_path), 0)
+    res = image.resample_to_img(hipp_mask_img, ref, interpolation='nearest')
+    mask = np.round(res.get_fdata()).astype(bool)
+    affine = res.affine
+    ii, jj, kk = np.indices(mask.shape)
+    y = affine[1, 0] * ii + affine[1, 1] * jj + affine[1, 2] * kk + affine[1, 3]
+
+    labels_vol = np.zeros(mask.shape, dtype=np.int16)
+    labels_vol[mask & (y >= y_split)] = 2   # anterior
+    labels_vol[mask & (y < y_split)] = 1    # posterior
+    labels_img = nib.Nifti1Image(labels_vol, affine)
+
+    masker = NiftiLabelsMasker(
+        labels_img=labels_img, labels=['Background', 'pHipp', 'aHipp'],
+        standardize='zscore_sample', high_pass=0.01, t_r=TR, verbose=0)
+    ts = masker.fit_transform(str(bold_path))   # (T, 2): col0=pHipp(1), col1=aHipp(2)
+
+    out = {'phipp': ts[:, 0], 'ahipp': ts[:, 1]}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(cache, **out)
+    return out
 
 
 def extract_roi_timeseries(subject, session, task='svf'):
     schaefer = get_parcel_data(subject, session, task, atlas='Schaefer400_17Nets')
-    ho_sub = get_parcel_data(subject, session, task, atlas='HarvardOxford_sub')
+    hipp = extract_hipp_ap(subject, session, task)
     return {
         'pmc':   _avg_labels(schaefer, PMC_LABELS),
         'ag':    _avg_labels(schaefer, AG_LABELS),
@@ -192,7 +254,8 @@ def extract_roi_timeseries(subject, session, task='svf'):
         'dacc':  _avg_labels(schaefer, DACC_LABELS),
         'eac':   _avg_labels(schaefer, EAC_LABELS),
         'evc':   _avg_labels(schaefer, EVC_LABELS),
-        'hipp':  _avg_keywords(ho_sub, HIPP_KEYWORDS),
+        'ahipp': hipp['ahipp'],
+        'phipp': hipp['phipp'],
     }
 
 
