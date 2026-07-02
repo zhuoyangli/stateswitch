@@ -295,31 +295,28 @@ def parse_ahc_sentences(xlsx_path):
 
 
 def collect_cond2_runs(subject, btype):
-    """Return [(session, task, {cond: onset_times}, cur_onset_rel_array)].
+    """Return [(session, task, {cond: onset_times}, {cond: cur_onset_rel})].
 
-    cur_onset_rel_array holds, per kept event, the current unit's onset relative
-    to the anchor (previous unit offset at t=0)."""
+    cur_onset_rel holds, per kept event, the current unit's onset relative to the
+    anchor (previous unit offset at t=0), split by condition."""
     runs = []
-    if btype == 'svf_switch':
-        pattern = f'{subject}_ses-*_task-svf_desc-wordtimestampswithswitch.csv'
-        for csv in sorted(SVF_SWITCH_DIR.glob(pattern)):
-            ses = csv.stem.split('_')[1]
-            df = parse_svf_switch(csv)
-            runs.append((ses, 'svf', {
-                'switch': df.loc[df.trial_type == 'switch', 'onset'].values,
-                'cluster': df.loc[df.trial_type == 'cluster', 'onset'].values,
-            }, df['cur_onset_rel'].values))
-    elif btype == 'ahc_sentence':
-        for xlsx in sorted(AHC_SENT_DIR.glob(
-                f'{subject}_ses-*_task-ahc_desc-sentences.xlsx')):
-            ses = xlsx.stem.split('_')[1]
-            df = parse_ahc_sentences(xlsx)
-            runs.append((ses, 'ahc', {
-                'Across': df.loc[df.trial_type == 'Across', 'onset'].values,
-                'Within': df.loc[df.trial_type == 'Within', 'onset'].values,
-            }, df['cur_onset_rel'].values))
-    else:
+    specs = {
+        'svf_switch': ('svf', SVF_SWITCH_DIR,
+                       f'{subject}_ses-*_task-svf_desc-wordtimestampswithswitch.csv',
+                       parse_svf_switch, ('switch', 'cluster')),
+        'ahc_sentence': ('ahc', AHC_SENT_DIR,
+                         f'{subject}_ses-*_task-ahc_desc-sentences.xlsx',
+                         parse_ahc_sentences, ('Across', 'Within')),
+    }
+    if btype not in specs:
         raise ValueError(btype)
+    task, folder, pattern, parse, conds = specs[btype]
+    for path in sorted(folder.glob(pattern)):
+        ses = path.stem.split('_')[1]
+        df = parse(path)
+        onset = {c: df.loc[df.trial_type == c, 'onset'].values for c in conds}
+        cur = {c: df.loc[df.trial_type == c, 'cur_onset_rel'].values for c in conds}
+        runs.append((ses, task, onset, cur))
     return runs
 
 
@@ -503,12 +500,15 @@ def compute_column(subjects, col, roi_spec, load_run):
             out[rk]['n_ev'] = n_ev
         out['_offset_marker'] = offset_marker
     else:
-        # mean current-unit onset relative to the anchor (previous offset)
-        cur_rels = []
+        # per-condition mean current-unit onset relative to the anchor (prev offset)
+        cur_by_cond = {ck: [] for ck, _, _ in col['conds']}
         for s in subjects:
-            for _, _, _cond, cur in collect_cond2_runs(s, col['key']):
-                cur_rels.extend(list(cur))
-        out['_onset_marker'] = float(np.nanmean(cur_rels)) if cur_rels else None
+            for _, _, _onset, cur in collect_cond2_runs(s, col['key']):
+                for ck in cur_by_cond:
+                    cur_by_cond[ck].extend(list(cur.get(ck, [])))
+        out['_onset_marker'] = {
+            ck: (float(np.nanmean(v)) if len(v) else None)
+            for ck, v in cur_by_cond.items()}
         for rk, _ in roi_spec:
             for cond_key, _, _ in col['conds']:
                 subj_means, n_ev = [], 0
@@ -583,15 +583,17 @@ def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
                     g = cell.get(cond_key)
                     if g is None:
                         continue
-                    n_ev = cell.get(f'n_ev_{cond_key}', 0)
                     ax.plot(time, g['mean'], color=cond_color, lw=1.8,
-                            label=f"{cond_label} (N={g['n_subj']}, {n_ev} ev)")
+                            label=f"{cond_label} (N={g['n_subj']})")
                     ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
                                     color=cond_color, alpha=0.2, lw=0)
-                marker = data[col['key']].get('_onset_marker')
-                if marker is not None and time[0] <= marker <= time[-1]:
-                    ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
-                               alpha=0.9, label=f'Cur. onset (≈{marker:.0f}s)')
+                # per-condition current-unit onset markers (color-matched)
+                markers = data[col['key']].get('_onset_marker') or {}
+                for cond_key, cond_label, cond_color in col['conds']:
+                    m = markers.get(cond_key)
+                    if m is not None and time[0] <= m <= time[-1]:
+                        ax.axvline(m, color=cond_color, lw=1.3, ls='--', alpha=0.9,
+                                   label=f'{cond_label} onset (≈{m:.0f}s)')
 
             if col.get('yscale', 'coarse') == 'coarse':
                 ax.set_ylim(ylo, yhi)
