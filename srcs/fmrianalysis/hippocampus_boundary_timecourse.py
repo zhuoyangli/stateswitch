@@ -230,45 +230,52 @@ def parse_svf_switch(csv_path):
     prev_next = df['preceding_word'] == 'next'
     df = df[~(is_switch & (prev_switch | prev_next))].copy()
 
-    df['onset'] = df['preceding_end'] - SCANNER_START_OFFSET
+    df['onset'] = df['preceding_end'] - SCANNER_START_OFFSET       # t=0: prev word offset
+    df['cur_onset_rel'] = df['start'] - df['preceding_end']        # current word onset
     df['trial_type'] = df['switch_flag'].map({1: 'switch', 0: 'cluster'})
     df = df.dropna(subset=['onset'])
     df = df[df['onset'] >= 0]
-    return df[['onset', 'trial_type']]
+    return df[['onset', 'trial_type', 'cur_onset_rel']]
 
 
 def parse_ahc_sentences(xlsx_path):
     """AHC sentence events locked to the PRECEDING sentence offset (End Time).
 
-    Mirrors ahc_across_vs_within_glm.get_events_dataframe: classify each sentence
-    as Across- vs Within-Possibility relative to the previous sentence of the same
-    prompt; drop the first sentence of each prompt. Returns onset, trial_type in
-    {'Across','Within'}."""
+    Classify each sentence as Across- vs Within-Possibility relative to the
+    previous sentence of the same prompt (as in ahc_across_vs_within_glm), then
+    lock to that preceding sentence's offset so the anchor matches the SVF column
+    (previous-unit offset). Returns onset, trial_type in {'Across','Within'}, and
+    cur_onset_rel (current sentence onset relative to the anchor)."""
     df = pd.read_excel(xlsx_path)
     df.columns = df.columns.str.strip()
     df['Prompt Number'] = df['Prompt Number'].ffill()
     df = df.sort_values(['Prompt Number', 'Start Time']).reset_index(drop=True)
     df['Preceding_Possibility'] = df.groupby('Prompt Number')['Possibility Number'].shift(1)
+    df['Preceding_End'] = df.groupby('Prompt Number')['End Time'].shift(1)
     df['is_switch'] = df['Possibility Number'] != df['Preceding_Possibility']
-    df = df.dropna(subset=['Preceding_Possibility']).copy()
+    df = df.dropna(subset=['Preceding_Possibility', 'Preceding_End']).copy()
     df['trial_type'] = df['is_switch'].map({True: 'Across', False: 'Within'})
-    df['onset'] = df['End Time'] - SCANNER_START_OFFSET
+    df['onset'] = df['Preceding_End'] - SCANNER_START_OFFSET       # t=0: prev sentence offset
+    df['cur_onset_rel'] = df['Start Time'] - df['Preceding_End']   # current sentence onset
     df = df[df['onset'] >= 0]
-    return df[['onset', 'trial_type']]
+    return df[['onset', 'trial_type', 'cur_onset_rel']]
 
 
 def collect_cond2_runs(subject, btype):
-    """Return [(session, task, {cond: onset_times})] for a fine-boundary column."""
+    """Return [(session, task, {cond: onset_times}, cur_onset_rel_array)].
+
+    cur_onset_rel_array holds, per kept event, the current unit's onset relative
+    to the anchor (previous unit offset at t=0)."""
     runs = []
     if btype == 'svf_switch':
-        for csv in sorted(SVF_SWITCH_DIR.glob(
-                f'{subject}_ses-*_task-svf_desc-wordtimestampswithswitch.csv')):
+        pattern = f'{subject}_ses-*_task-svf_desc-wordtimestampswithswitch.csv'
+        for csv in sorted(SVF_SWITCH_DIR.glob(pattern)):
             ses = csv.stem.split('_')[1]
             df = parse_svf_switch(csv)
             runs.append((ses, 'svf', {
                 'switch': df.loc[df.trial_type == 'switch', 'onset'].values,
                 'cluster': df.loc[df.trial_type == 'cluster', 'onset'].values,
-            }))
+            }, df['cur_onset_rel'].values))
     elif btype == 'ahc_sentence':
         for xlsx in sorted(AHC_SENT_DIR.glob(
                 f'{subject}_ses-*_task-ahc_desc-sentences.xlsx')):
@@ -277,7 +284,7 @@ def collect_cond2_runs(subject, btype):
             runs.append((ses, 'ahc', {
                 'Across': df.loc[df.trial_type == 'Across', 'onset'].values,
                 'Within': df.loc[df.trial_type == 'Within', 'onset'].values,
-            }))
+            }, df['cur_onset_rel'].values))
     else:
         raise ValueError(btype)
     return runs
@@ -292,7 +299,7 @@ def all_needed_runs(subjects, columns):
                 for ses, task, _, _ in collect_trial_runs(subject, col['key']):
                     runs.add((subject, ses, task))
             else:
-                for ses, task, _ in collect_cond2_runs(subject, col['key']):
+                for ses, task, *_ in collect_cond2_runs(subject, col['key']):
                     runs.add((subject, ses, task))
     return sorted(runs)
 
@@ -405,7 +412,7 @@ def subject_cond2_mean(subject, btype, roi_key, cond, win):
     """Offset-locked mean for one subject/fine-column/ROI/condition -> (tc, n)."""
     tb, ta = win
     epochs = []
-    for ses, task, cond_times in collect_cond2_runs(subject, btype):
+    for ses, task, cond_times, _cur in collect_cond2_runs(subject, btype):
         run = load_hipp_run(subject, ses, task)
         if run is None:
             continue
@@ -463,6 +470,12 @@ def compute_column(subjects, col):
             out[rk]['n_ev'] = n_ev
         out['_offset_marker'] = offset_marker
     else:
+        # mean current-unit onset relative to the anchor (previous offset)
+        cur_rels = []
+        for s in subjects:
+            for _, _, _cond, cur in collect_cond2_runs(s, col['key']):
+                cur_rels.extend(list(cur))
+        out['_onset_marker'] = float(np.nanmean(cur_rels)) if cur_rels else None
         for rk, _ in ROI_SPEC:
             for cond_key, _, _ in col['conds']:
                 subj_means, n_ev = [], 0
@@ -480,31 +493,29 @@ def make_figure(subjects, columns):
     times = {col['key']: _time_axis(col['win']) for col in columns}
     data = {col['key']: compute_column(subjects, col) for col in columns}
 
-    # Shared y-limits across all subplots (project convention). Trial columns
-    # show individual-subject lines, so bound to those; fine columns use mean±SEM.
+    # Two shared y-scales: the coarse-boundary columns (individual-subject lines)
+    # share one range bounded to those lines; the fine within-trial columns share
+    # a smaller fixed range for readability.
     ylo, yhi = np.inf, -np.inf
     for col in columns:
+        if col['kind'] != 'trial':
+            continue
         for rk, _ in ROI_SPEC:
-            cell = data[col['key']][rk]
-            if col['kind'] == 'trial':
-                for _, tc in cell.get('subjects', []):
-                    ylo = min(ylo, float(np.min(tc)))
-                    yhi = max(yhi, float(np.max(tc)))
-            else:
-                for v in cell.values():
-                    if isinstance(v, dict) and 'mean' in v:
-                        ylo = min(ylo, np.min(v['mean'] - v['sem']))
-                        yhi = max(yhi, np.max(v['mean'] + v['sem']))
+            for _, tc in data[col['key']][rk].get('subjects', []):
+                ylo = min(ylo, float(np.min(tc)))
+                yhi = max(yhi, float(np.max(tc)))
     if not np.isfinite(ylo):
         ylo, yhi = -1, 1
     pad = 0.08 * (yhi - ylo)
     ylo, yhi = ylo - pad, yhi + pad
+    FINE_YLIM = (-0.5, 0.5)
 
     n_rows, n_cols = len(ROI_SPEC), len(columns)
+    first_fine = next((i for i, c in enumerate(columns) if c['kind'] != 'trial'), None)
     # Independent x-axes (coarse boundaries use a wider window than the fine
-    # within-trial ones); y shared across all panels.
+    # within-trial ones); y shared within each column group, not across groups.
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
-                             squeeze=False, sharex=False, sharey=True)
+                             squeeze=False, sharex=False, sharey=False)
     fig.suptitle('Hippocampus boundary-locked time courses '
                  '(coarse: subjects + black group mean; fine: mean ± SEM)',
                  fontsize=13, fontweight='bold', y=0.995)
@@ -539,8 +550,12 @@ def make_figure(subjects, columns):
                             label=f"{cond_label} (N={g['n_subj']}, {n_ev} ev)")
                     ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
                                     color=cond_color, alpha=0.2, lw=0)
+                marker = data[col['key']].get('_onset_marker')
+                if marker is not None and time[0] <= marker <= time[-1]:
+                    ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
+                               alpha=0.9, label=f'Cur. onset (≈{marker:.0f}s)')
 
-            ax.set_ylim(ylo, yhi)
+            ax.set_ylim(ylo, yhi) if col['kind'] == 'trial' else ax.set_ylim(*FINE_YLIM)
             ax.set_xlim(time[0], time[-1])
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
@@ -548,6 +563,10 @@ def make_figure(subjects, columns):
                 ax.set_title(col['title'], fontsize=9, fontweight='bold')
             if c == 0:
                 ax.set_ylabel(f'{rname}\nBOLD (z)', fontsize=9)
+            elif c == first_fine:
+                ax.set_ylabel('BOLD (z)', fontsize=9)
+            else:
+                ax.tick_params(labelleft=False)
             if r == n_rows - 1:
                 ax.set_xlabel('Time rel. boundary (s)', fontsize=9)
             else:
