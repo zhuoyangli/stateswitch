@@ -66,7 +66,7 @@ from fmrianalysis.utils import (
 # CONSTANTS
 # ============================================================================
 
-OUTPUT_DIR = FIGS_DIR / 'hippocampus_boundary_timecourse'
+OUTPUT_DIR = FIGS_DIR / 'boundary_timecourse'
 CACHE_DIR = ANALYSIS_CACHE_DIR / 'hipp_ap'
 RECALL_DIR = DATA_DIR / 'filmfest_recall_timestamps'
 SVF_SWITCH_DIR = DATA_DIR / 'rec/svf_transition_ratings/source'
@@ -106,22 +106,24 @@ ROI_SPEC = [
 # Column specification.
 #   kind='trial'  -> onset-locked single curve + dashed prev-offset marker
 #   kind='cond2'  -> offset-locked, two condition curves
+# yscale: which shared y-range a column uses — 'coarse' (subject-bounded, big
+# trial responses) or 'fine' (fixed small range for subtle within-trial effects).
 COLUMNS = [
-    dict(key='svf', kind='trial', win=TRIAL_WIN,
+    dict(key='svf', kind='trial', win=TRIAL_WIN, yscale='coarse',
          title='Word Generation\n(SVF trial)'),
-    dict(key='ahc', kind='trial', win=TRIAL_WIN,
+    dict(key='ahc', kind='trial', win=TRIAL_WIN, yscale='coarse',
          title='Explanation Generation\n(AHC trial)'),
-    dict(key='movie', kind='trial', win=TRIAL_WIN,
+    dict(key='movie', kind='trial', win=TRIAL_WIN, yscale='coarse',
          title='Movie Watching\n(between-movie)'),
-    dict(key='recall', kind='trial', win=TRIAL_WIN,
+    dict(key='recall', kind='trial', win=TRIAL_WIN, yscale='coarse',
          title='Movie Recall\n(between-movie)'),
-    dict(key='within_movie', kind='trial', win=TRIAL_WIN,
+    dict(key='within_movie', kind='trial', win=TRIAL_WIN, yscale='fine',
          title='Movie Watching\n(within-movie\nevent boundary)'),
-    dict(key='svf_switch', kind='cond2', win=COND2_WIN,
+    dict(key='svf_switch', kind='cond2', win=COND2_WIN, yscale='fine',
          title='Word Generation\n(switch vs cluster,\nprev-word offset)',
          conds=[('switch', 'Switch', '#e74c3c'),
                 ('cluster', 'Cluster', '#7f7f7f')]),
-    dict(key='ahc_sentence', kind='cond2', win=COND2_WIN,
+    dict(key='ahc_sentence', kind='cond2', win=COND2_WIN, yscale='fine',
          title='Explanation Generation\n(across vs within,\nprev-sentence offset)',
          conds=[('Across', 'Across-explanation', '#e74c3c'),
                 ('Within', 'Within-explanation', '#7f7f7f')]),
@@ -526,12 +528,13 @@ def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
     data = {col['key']: compute_column(subjects, col, roi_spec, load_run)
             for col in columns}
 
-    # Two shared y-scales: the coarse-boundary columns (individual-subject lines)
-    # share one range bounded to those lines; the fine within-trial columns share
-    # a smaller fixed range for readability.
+    # Two shared y-scales: 'coarse' columns (individual-subject lines) share one
+    # range bounded to those lines; 'fine' columns share a smaller fixed range for
+    # readability. A column's yscale is independent of its kind (e.g. within-movie
+    # is a trial column but plotted on the fine scale).
     ylo, yhi = np.inf, -np.inf
     for col in columns:
-        if col['kind'] != 'trial':
+        if col.get('yscale', 'coarse') != 'coarse':
             continue
         for rk, _ in roi_spec:
             for _, tc in data[col['key']][rk].get('subjects', []):
@@ -544,7 +547,8 @@ def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
     FINE_YLIM = fine_ylim
 
     n_rows, n_cols = len(roi_spec), len(columns)
-    first_fine = next((i for i, c in enumerate(columns) if c['kind'] != 'trial'), None)
+    first_fine = next((i for i, c in enumerate(columns)
+                       if c.get('yscale', 'coarse') == 'fine'), None)
     # Independent x-axes (coarse boundaries use a wider window than the fine
     # within-trial ones); y shared within each column group, not across groups.
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
@@ -562,11 +566,14 @@ def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
             if col['kind'] == 'trial':
                 for subj, tc in cell.get('subjects', []):
                     ax.plot(time, tc, color=SUBJECT_COLORS.get(subj, '#999999'),
-                            lw=0.9, alpha=0.75)
+                            lw=0.9, alpha=0.7)
                 g = cell.get('onset')
                 if g is not None:
+                    # SEM across subjects (N), not pooled events.
+                    ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
+                                    color='k', alpha=0.18, lw=0)
                     ax.plot(time, g['mean'], color='k', lw=2.4,
-                            label=f"Group mean (N={g['n_subj']}, {cell['n_ev']} ev)")
+                            label=f"Group mean ± SEM (N={g['n_subj']})")
                 marker = data[col['key']].get('_offset_marker')
                 if marker is not None and time[0] <= marker <= time[-1]:
                     ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
@@ -586,7 +593,10 @@ def make_figure(subjects, columns, roi_spec, load_run, *, title, out_path,
                     ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
                                alpha=0.9, label=f'Cur. onset (≈{marker:.0f}s)')
 
-            ax.set_ylim(ylo, yhi) if col['kind'] == 'trial' else ax.set_ylim(*FINE_YLIM)
+            if col.get('yscale', 'coarse') == 'coarse':
+                ax.set_ylim(ylo, yhi)
+            else:
+                ax.set_ylim(*FINE_YLIM)
             ax.set_xlim(time[0], time[-1])
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
@@ -662,7 +672,7 @@ def main():
     make_figure(
         subjects, COLUMNS, ROI_SPEC, load_hipp_run,
         title='Hippocampus boundary-locked time courses '
-              '(coarse: subjects + black group mean; fine: mean ± SEM)',
+              '(coarse: subjects + black group mean ± SEM; fine: mean ± SEM)',
         out_path=OUTPUT_DIR / 'hippocampus_boundary_timecourse.png')
     print('\nDONE.')
 
