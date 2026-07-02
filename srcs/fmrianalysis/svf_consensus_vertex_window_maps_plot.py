@@ -239,8 +239,9 @@ def render_contrast(map_a, map_b, window, save_path, subjects_dir, fsaverage,
 
 
 def render_level_montage(d, mode, lvl, windows, save_path, subjects_dir, fsaverage,
-                         threshold, vmax, title, pmc_verts=None):
+                         threshold, vmax, title, align='onset', pmc_verts=None):
     """One level: rows = windows, cols = 4 brain views."""
+    lock_name = 'previous word offset' if align == 'offset' else 'word onset'
     nrows, ncols = len(windows), len(PANELS)
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 2.2 + 1.2, nrows * 1.7),
                              facecolor=FIGURE_PARAMS['facecolor'], squeeze=False)
@@ -259,7 +260,7 @@ def render_level_montage(d, mode, lvl, windows, save_path, subjects_dir, fsavera
             if c == 0:
                 ax.set_ylabel(f'{_fmt_sec(a)} to {_fmt_sec(b)} s', fontsize=9,
                               rotation=90, labelpad=6)
-    fig.suptitle(f"{title}  (n={d['n_events']})\nmean z-scored BOLD, time from word onset",
+    fig.suptitle(f"{title}  (n={d['n_events']})\nmean z-scored BOLD, time from {lock_name}",
                  fontsize=13, y=0.995)
     fig.subplots_adjust(left=0.07, right=0.9, top=0.9, bottom=0.01, wspace=0.02, hspace=0.05)
     _colorbar(fig, vmax, threshold)
@@ -329,7 +330,8 @@ def main():
                 d, args.by, lvl, WINDOW_SETS['4.5s'],
                 base / f'GROUP_montage_{lvl}_{tag}.png',
                 subjects_dir, fsaverage, args.threshold, args.vmax,
-                title=f'SVF {lvl} — Group (N={d["n_subjects"]})', pmc_verts=pmc_verts)
+                title=f'SVF {lvl} — Group (N={d["n_subjects"]})',
+                align=args.align, pmc_verts=pmc_verts)
 
     # ---- PER SUBJECT ----
     if args.per_subject:
