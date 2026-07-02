@@ -125,6 +125,8 @@ COLUMNS = [
 
 ONSET_COLOR = '#1f77b4'
 OFFSET_MARKER_COLOR = '#555555'
+# Per-subject line colors for the coarse-boundary columns (group mean = black).
+SUBJECT_COLORS = {s: c for s, c in zip(SUBJECT_IDS, plt.cm.tab10.colors)}
 
 
 # ============================================================================
@@ -456,7 +458,8 @@ def compute_column(subjects, col):
                 if tc is not None:
                     subj_means.append((s, tc))
                     n_ev += n
-            out[rk]['onset'] = _group(subj_means)
+            out[rk]['subjects'] = subj_means          # [(subject, tc)] colored lines
+            out[rk]['onset'] = _group(subj_means)     # group mean (black line)
             out[rk]['n_ev'] = n_ev
         out['_offset_marker'] = offset_marker
     else:
@@ -477,15 +480,21 @@ def make_figure(subjects, columns):
     times = {col['key']: _time_axis(col['win']) for col in columns}
     data = {col['key']: compute_column(subjects, col) for col in columns}
 
-    # Shared y-limits across all subplots (project convention).
+    # Shared y-limits across all subplots (project convention). Trial columns
+    # show individual-subject lines, so bound to those; fine columns use mean±SEM.
     ylo, yhi = np.inf, -np.inf
     for col in columns:
         for rk, _ in ROI_SPEC:
             cell = data[col['key']][rk]
-            for v in cell.values():
-                if isinstance(v, dict) and 'mean' in v:
-                    ylo = min(ylo, np.min(v['mean'] - v['sem']))
-                    yhi = max(yhi, np.max(v['mean'] + v['sem']))
+            if col['kind'] == 'trial':
+                for _, tc in cell.get('subjects', []):
+                    ylo = min(ylo, float(np.min(tc)))
+                    yhi = max(yhi, float(np.max(tc)))
+            else:
+                for v in cell.values():
+                    if isinstance(v, dict) and 'mean' in v:
+                        ylo = min(ylo, np.min(v['mean'] - v['sem']))
+                        yhi = max(yhi, np.max(v['mean'] + v['sem']))
     if not np.isfinite(ylo):
         ylo, yhi = -1, 1
     pad = 0.08 * (yhi - ylo)
@@ -496,8 +505,9 @@ def make_figure(subjects, columns):
     # within-trial ones); y shared across all panels.
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows),
                              squeeze=False, sharex=False, sharey=True)
-    fig.suptitle('Hippocampus boundary-locked time courses (group mean ± SEM)',
-                 fontsize=14, fontweight='bold', y=0.995)
+    fig.suptitle('Hippocampus boundary-locked time courses '
+                 '(coarse: subjects + black group mean; fine: mean ± SEM)',
+                 fontsize=13, fontweight='bold', y=0.995)
 
     for r, (rk, rname) in enumerate(ROI_SPEC):
         for c, col in enumerate(columns):
@@ -508,12 +518,13 @@ def make_figure(subjects, columns):
             ax.axvline(0, color='k', lw=1.0, ls='-', alpha=0.7)
 
             if col['kind'] == 'trial':
+                for subj, tc in cell.get('subjects', []):
+                    ax.plot(time, tc, color=SUBJECT_COLORS.get(subj, '#999999'),
+                            lw=0.9, alpha=0.75)
                 g = cell.get('onset')
                 if g is not None:
-                    ax.plot(time, g['mean'], color=ONSET_COLOR, lw=1.8,
-                            label=f"Onset-locked (N={g['n_subj']}, {cell['n_ev']} ev)")
-                    ax.fill_between(time, g['mean'] - g['sem'], g['mean'] + g['sem'],
-                                    color=ONSET_COLOR, alpha=0.2, lw=0)
+                    ax.plot(time, g['mean'], color='k', lw=2.4,
+                            label=f"Group mean (N={g['n_subj']}, {cell['n_ev']} ev)")
                 marker = data[col['key']].get('_offset_marker')
                 if marker is not None and time[0] <= marker <= time[-1]:
                     ax.axvline(marker, color=OFFSET_MARKER_COLOR, lw=1.4, ls='--',
@@ -544,7 +555,16 @@ def make_figure(subjects, columns):
             ax.legend(fontsize=5.5, loc='upper right', framealpha=0.6)
             ax.tick_params(labelsize=8)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    # Figure-level legend mapping the per-subject line colors (trial columns).
+    from matplotlib.lines import Line2D
+    subj_handles = [Line2D([0], [0], color=SUBJECT_COLORS[s], lw=1.5, label=s)
+                    for s in subjects]
+    subj_handles.append(Line2D([0], [0], color='k', lw=2.4, label='Group mean'))
+    fig.legend(handles=subj_handles, loc='upper center',
+               bbox_to_anchor=(0.5, 0.965), ncol=len(subj_handles),
+               fontsize=8, frameon=False)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_DIR / 'hippocampus_boundary_timecourse.png'
     fig.savefig(out, dpi=300, bbox_inches='tight')
