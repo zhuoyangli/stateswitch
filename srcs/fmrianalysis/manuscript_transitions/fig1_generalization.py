@@ -80,14 +80,19 @@ from fmrianalysis.manuscript_transitions._style import apply_zero_format
 # CONSTANTS
 # ============================================================================
 
-CONDS = ('enc', 'rec', 'ahc', 'svf')
+CONDS = ('enc', 'rec', 'ahc', 'svf')   # the four between-event transitions
 COND_LABELS = {
     'enc': 'Movies\n(between)',
     'rec': 'Recall\n(between)',
     'ahc': 'Scenarios\n(AHC)',
     'svf': 'Words\n(SVF)',
+    'enc_within': 'Movie\nwithin\n(event)',
 }
 DISSOC_COND = 'enc_within'   # within-movie event boundary (dissociation control)
+# The Panel-A matrix additionally shows the within-movie event boundary as a 5th
+# row/column so the dissociation is visible in the matrix itself. Cross-type
+# generalization / within-type reliability stats stay over the 4 transitions.
+MATRIX_CONDS = (*CONDS, DISSOC_COND)
 
 # Template windows in TR offsets relative to the boundary (index TRS_BEFORE=t0).
 # Lee & Chen: 15 s post-offset window + 3-TR (4.5 s) HRF shift.
@@ -284,28 +289,28 @@ def compute(subjects, tems):
 
     Matrix diagonal = split-half within-condition reliability (mean-template
     scale, comparable to the off-diagonal cross-type cells)."""
-    n = len(CONDS)
-    mats_post = []            # (S, 4, 4) cross-type corr of subject-mean posts
-    mats_base = []            # (S, 4, 4) baseline control
+    n = len(MATRIX_CONDS)     # 5x5 matrix (4 between-event + within-movie event)
+    mats_post = []            # (S, 5, 5) cross-type corr of subject-mean posts
+    mats_base = []            # (S, 5, 5) baseline control
     within = {c: [] for c in CONDS}          # per-subject within reliability
     dissoc = {'between_x_between': [], 'between_x_within': []}
-    have = {c: 0 for c in (*CONDS, DISSOC_COND)}
+    have = {c: 0 for c in MATRIX_CONDS}
 
     for subj in subjects:
         tem = tems[subj]
-        for c in (*CONDS, DISSOC_COND):
+        for c in MATRIX_CONDS:
             if tem[c] is not None:
                 have[c] += 1
 
         mpost = {c: (tem[c]['post'].mean(0) if tem[c] is not None else None)
-                 for c in CONDS}
+                 for c in MATRIX_CONDS}
         mbase = {c: (tem[c]['base'].mean(0) if tem[c] is not None else None)
-                 for c in CONDS}
+                 for c in MATRIX_CONDS}
 
         Mp = np.full((n, n), np.nan)
         Mb = np.full((n, n), np.nan)
-        for i, ci in enumerate(CONDS):
-            for j, cj in enumerate(CONDS):
+        for i, ci in enumerate(MATRIX_CONDS):
+            for j, cj in enumerate(MATRIX_CONDS):
                 if i == j:
                     if tem[ci] is not None:
                         Mp[i, j] = _split_half_reliability(tem[ci]['post'])
@@ -371,12 +376,13 @@ def _paired_t(a, b):
 
 
 def build_stats(res):
-    n = len(CONDS)
-    # per-subject mean cross-type generalization (off-diagonal, boundary vs base)
-    off = ~np.eye(n, dtype=bool)
-    cross_post = [ _fisher_mean(res['mats_post'][s][off])
+    nb = len(CONDS)   # cross-type generalization over the 4 between-event block
+    # per-subject mean cross-type generalization (off-diagonal of the 4x4
+    # between-event sub-block; the within-movie 5th row/col is excluded here).
+    off = ~np.eye(nb, dtype=bool)
+    cross_post = [ _fisher_mean(res['mats_post'][s][:nb, :nb][off])
                    for s in range(res['mats_post'].shape[0]) ]
-    cross_base = [ _fisher_mean(res['mats_base'][s][off])
+    cross_base = [ _fisher_mean(res['mats_base'][s][:nb, :nb][off])
                    for s in range(res['mats_base'].shape[0]) ]
     within_diag = [ _fisher_mean([res['within'][c][s] for c in CONDS])
                     for s in range(len(res['subjects'])) ]
@@ -418,28 +424,35 @@ def _stars(p):
 
 
 def make_figure(res, S, vmax=0.4):
-    labels = [COND_LABELS[c] for c in CONDS]
-    fig = plt.figure(figsize=(15, 5.0), facecolor='white')
-    gs = gridspec.GridSpec(1, 3, figure=fig, width_ratios=[1.15, 1.0, 0.9],
+    labels = [COND_LABELS[c] for c in MATRIX_CONDS]
+    nm = len(MATRIX_CONDS)
+    fig = plt.figure(figsize=(15.5, 5.0), facecolor='white')
+    gs = gridspec.GridSpec(1, 3, figure=fig, width_ratios=[1.3, 1.0, 0.9],
                            left=0.07, right=0.97, top=0.82, bottom=0.16,
                            wspace=0.42)
 
-    # -- Panel A: 4x4 template correlation matrix ----------------------------
+    # -- Panel A: 5x5 template correlation matrix ----------------------------
+    # 4 between-event transitions + within-movie event boundary (5th). The
+    # within-movie row/col reads apart from the between-event block -> the
+    # dissociation is visible directly in the matrix.
     axA = fig.add_subplot(gs[0, 0])
     M = res['group_post']
     im = axA.imshow(M, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-    axA.set_xticks(range(len(CONDS))); axA.set_yticks(range(len(CONDS)))
-    axA.set_xticklabels(labels, fontsize=LABEL_FS - 3)
-    axA.set_yticklabels(labels, fontsize=LABEL_FS - 3)
-    for i in range(len(CONDS)):
-        for j in range(len(CONDS)):
+    axA.set_xticks(range(nm)); axA.set_yticks(range(nm))
+    axA.set_xticklabels(labels, fontsize=LABEL_FS - 4)
+    axA.set_yticklabels(labels, fontsize=LABEL_FS - 4)
+    for i in range(nm):
+        for j in range(nm):
             if not np.isnan(M[i, j]):
                 axA.text(j, i, f'{M[i, j]:.2f}', ha='center', va='center',
-                         fontsize=LABEL_FS - 3,
+                         fontsize=LABEL_FS - 4,
                          color='white' if abs(M[i, j]) > vmax * 0.6 else 'k')
+    # divider separating the 4 between-event block from the within-movie 5th
+    axA.axhline(len(CONDS) - 0.5, color='k', lw=1.5)
+    axA.axvline(len(CONDS) - 0.5, color='k', lw=1.5)
     axA.set_title('A  PMC boundary-template correlation\n'
-                  '(diag = within-type reliability)',
-                  fontsize=LABEL_FS - 1, fontweight='bold')
+                  '(diag = within-type reliability; 5th = within-movie event)',
+                  fontsize=LABEL_FS - 2, fontweight='bold')
     cb = fig.colorbar(im, ax=axA, fraction=0.046, pad=0.04)
     cb.set_label('Pattern r', fontsize=LABEL_FS - 3)
 
