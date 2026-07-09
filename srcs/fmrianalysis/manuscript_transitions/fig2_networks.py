@@ -36,6 +36,7 @@ Usage:
 """
 
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -104,6 +105,37 @@ def panelB_spatial_corr():
     return per_cond
 
 
+def generalized_spatial_corr():
+    """The KEY framing test: does the GENERALIZED transition response (the
+    per-subject response map averaged across the four between-event transitions,
+    which denoises) spatially load onto the DN-A>DN-B preference map?
+    Averaging maps first is better-powered than averaging per-condition rs.
+    Returns per-subject spatial r (hemisphere-averaged)."""
+    from scipy.stats import pearsonr
+    BND = ANALYSIS_CACHE_DIR / 'five_boundary_pattern_per_subject'
+    between = ['enc', 'rec', 'svf', 'ahc']
+    out = []
+    for s in CORR_SUBS:
+        rs = []
+        for hemi in ('left', 'right'):
+            vk = 'lh_pmc_verts' if hemi == 'left' else 'rh_pmc_verts'
+            pk = 'z_phc_lh' if hemi == 'left' else 'z_phc_rh'
+            tk = 'z_tpj_lh' if hemi == 'left' else 'z_tpj_rh'
+            stem = f'pmc_{hemi}_tb10_ta20_post3-13_onset'
+            d = np.load(ANALYSIS_CACHE_DIR / 'pmc_dna_dnb_contrast' / f'{s}.npz',
+                        allow_pickle=True)
+            verts = np.asarray(d[vk], int)
+            pref = stats.zscore(stats.zscore(d[pk]) - stats.zscore(d[tk]))
+            maps = [pickle.load(open(BND / f'{p}_{stem}.pkl', 'rb'))[s][verts]
+                    for p in between]
+            gen = np.nanmean(np.vstack(maps), axis=0)
+            ok = ~np.isnan(gen)
+            if ok.sum() > 2:
+                rs.append(pearsonr(pref[ok], gen[ok])[0])
+        out.append(float(np.nanmean(rs)) if rs else np.nan)
+    return np.asarray(out, float)
+
+
 def panelC_magnitude():
     """DN-A minus DN-B post-onset magnitude per subject x condition, from the
     relu-weighted PMC timecourses (onset-locked, cached)."""
@@ -129,7 +161,7 @@ def panelC_magnitude():
 # PLOT
 # ============================================================================
 
-def make_figure(za, zb, vr, vp, corrB, magC, subs):
+def make_figure(za, zb, vr, vp, corrB, magC, genB, subs):
     fig = plt.figure(figsize=(15.5, 5.0), facecolor='white')
     gs = gridspec.GridSpec(1, 3, figure=fig, width_ratios=[0.85, 1.05, 1.15],
                            left=0.06, right=0.98, top=0.82, bottom=0.17,
@@ -172,11 +204,22 @@ def make_figure(za, zb, vr, vp, corrB, magC, subs):
         st = _one_sample_t(corrB[k]); stats_B[k] = st
         axB.text(i, max(means[i] + sems[i], 0) + 0.02, _stars(st['p']),
                  ha='center', va='bottom', fontsize=LABEL_FS - 4)
+    # generalized (pooled across the 4 between-event transitions) — the key test
+    ig = len(keysB)
+    gv = genB[~np.isnan(genB)]
+    axB.bar(ig, gv.mean(), yerr=stats.sem(gv), width=0.66, color='#8B0000',
+            alpha=0.9, capsize=3)
+    axB.scatter(np.full(gv.size, ig) + rng.uniform(-0.12, 0.12, gv.size), gv,
+                s=14, color='k', alpha=0.55, zorder=3)
+    st_gen = _one_sample_t(genB); stats_B['generalized'] = st_gen
+    axB.text(ig, gv.mean() + stats.sem(gv) + 0.02, _stars(st_gen['p']),
+             ha='center', va='bottom', fontsize=LABEL_FS - 4)
     axB.axhline(0, color='k', lw=0.8)
-    axB.set_xticks(range(len(keysB)))
+    axB.set_xticks(range(len(keysB) + 1))
     lblmap = {'within': 'Movie\nwithin', 'enc': 'Movies\n(between)',
               'rec': 'Recall', 'svf': 'Words', 'ahc': 'Scenarios'}
-    axB.set_xticklabels([lblmap[k] for k in keysB], fontsize=LABEL_FS - 4)
+    axB.set_xticklabels([lblmap[k] for k in keysB] + ['Generalized\n(pooled)'],
+                        fontsize=LABEL_FS - 4)
     axB.set_ylabel('spatial r(response, DN-A>DN-B pref)', fontsize=LABEL_FS - 3)
     axB.set_title('B  transition response is DN-A-like\n(response x preference map)',
                   fontsize=LABEL_FS - 1, fontweight='bold')
@@ -228,9 +271,10 @@ def main():
 
     za, zb, vr, vp = panelA_interdigitation()
     corrB = panelB_spatial_corr()
+    genB = generalized_spatial_corr()
     magC, subs = panelC_magnitude()
 
-    fig, stats_B, stats_C = make_figure(za, zb, vr, vp, corrB, magC, subs)
+    fig, stats_B, stats_C = make_figure(za, zb, vr, vp, corrB, magC, genB, subs)
     out = OUTPUT_DIR / 'fig2_networks.png'
     fig.savefig(out, dpi=300, bbox_inches='tight'); plt.close(fig)
     print(f"Figure -> {out}")
