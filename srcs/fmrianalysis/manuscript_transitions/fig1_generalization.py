@@ -15,13 +15,21 @@ this project's four trial-level transitions:
 Method (Lee-faithful):
   - Voxels  : Schaefer-400 17-net PMC (DefaultA_pCunPCC), bilateral, 6 mm smooth,
               MNI 2 mm -- identical voxel set across all tasks/runs.
-  - Window  : boundaries are OFFSET-locked (movie/trial ENDs). The peri-boundary
-              epoch spans -20..+40 TR (index 20 = t0). The boundary TEMPLATE is
-              the spatial pattern averaged over +4.5..+19.5 s post-offset
-              (TR +3..+13) -- Lee's "first 15 s after offset" + 3-TR HRF shift.
-  - Baseline: a non-boundary template averaged over -25.5..-10.5 s pre-offset
-              (TR -17..-7), a within-epoch non-transition control.
-  - Similarity is Pearson r between spatial templates; group average is Fisher-z.
+  - Window  : boundaries are OFFSET-locked (movie/trial ENDs). The boundary
+              TEMPLATE is the spatial pattern averaged over +4.5..+19.5 s
+              post-offset (TR +3..+13) -- Lee's "first 15 s after offset" +
+              3-TR HRF shift. The within-movie event-boundary template uses the
+              SAME +4.5..+19.5 s window, and EXCLUDES within-movie boundaries in
+              the first 45 s of each movie (Lee & Chen 2022).
+  - Similarity is Pearson r between spatial templates; group/subject averaging
+              uses RAW r (Lee & Chen averaged raw r, not Fisher-z).
+  - Baseline: NOTE a remaining difference from Lee & Chen -- the non-boundary
+              baseline here is a within-epoch pre-offset window (-25.5..-10.5 s),
+              NOT the "middle 15 s of each movie" they used. This affects only
+              the Panel-B baseline bar, not the boundary templates, the
+              cross-type generalization, or the within-vs-between dissociation.
+              (Also: this uses 6 mm MNI voxels; Lee used fsaverage6 surface,
+              4 mm FWHM.)
 
 Panels
   A  4x4 template-correlation matrix (off-diag = cross-type generalization;
@@ -46,12 +54,14 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy import stats
 
 from configs.config import TR, FIGS_DIR, ANALYSIS_CACHE_DIR, FILMFEST_SUBJECTS
 from configs.schaefer_rois import POSTERIOR_MEDIAL, get_bilateral_ids
+from fmrianalysis.filmfest_boundary_response import BS_CSV
 
 from fmrianalysis.filmfest_boundary_wspc import (
     load_roi_voxels as filmfest_load_roi,
@@ -60,7 +70,6 @@ from fmrianalysis.filmfest_boundary_wspc import (
 from fmrianalysis.filmfest_macro_micro_pattern_similarity import (
     extract_patterns_per_tr,
     get_macro_boundary_trs as filmfest_get_macro_trs,
-    get_micro_boundary_trs as filmfest_get_micro_trs,
     TRS_BEFORE, TRS_AFTER, N_TRS,
 )
 from fmrianalysis.svf_macro_micro_pattern_similarity import (
@@ -123,6 +132,28 @@ def _templates_from_patterns(pats):
     return post, base
 
 
+def within_movie_micro_trs_excl45(task):
+    """Strong within-movie event-boundary TRs, EXCLUDING boundaries in the first
+    45 s of each movie -- following Lee & Chen (2022), who excluded within-movie
+    boundaries in the first 45 s of each clip to avoid between-movie onset
+    carryover. Mirrors filmfest_boundary_response.get_within_movie_boundaries
+    (stimulus-time, HRF-corrected) with the added timestamp_sec >= 45 filter."""
+    bs = pd.read_csv(BS_CSV)
+    movie_ids = [1, 2, 3, 4, 5] if task == 'filmfest1' else [6, 7, 8, 9, 10]
+    bs_t = bs[bs['movie'].isin(movie_ids) & (bs['retained_for_fmri'] == 1)].copy()
+    HRF_SHIFT, RUN1_LEN = 3, 996
+    bs_t['run_rel_TR'] = bs_t['concat_TR'] - HRF_SHIFT
+    if task == 'filmfest2':
+        bs_t['run_rel_TR'] -= RUN1_LEN
+    bs_t['movie_onset_run_TR'] = bs_t['run_rel_TR'] - bs_t['timestamp_sec'] / TR
+    onset_TR = bs_t.groupby('movie')['movie_onset_run_TR'].mean()
+    bs_t['run_rel_sec'] = (onset_TR[bs_t['movie'].values].values * TR
+                           + bs_t['timestamp_sec'].values)
+    sel = bs_t[(bs_t['boundary_type'] == 'strong')
+               & (bs_t['timestamp_sec'] >= 45.0)]
+    return [int(round(t / TR)) for t in sorted(sel['run_rel_sec'].values)]
+
+
 def collect_subject(subject, parcel_ids, force=False):
     """Return dict cond -> dict(post=(Ni,V), base=(Ni,V)) for the 4 transition
     types plus the within-movie dissociation control. None where absent."""
@@ -140,7 +171,8 @@ def collect_subject(subject, parcel_ids, force=False):
             continue
         vox = filmfest_preprocess(raw, do_hp=True)
         p_macro, _ = extract_patterns_per_tr(vox, filmfest_get_macro_trs(task))
-        p_micro, _ = extract_patterns_per_tr(vox, filmfest_get_micro_trs(task))
+        # within-movie event boundaries, first-45 s excluded (Lee & Chen 2022)
+        p_micro, _ = extract_patterns_per_tr(vox, within_movie_micro_trs_excl45(task))
         if p_macro.shape[0] > 0:
             a, b = _templates_from_patterns(p_macro)
             enc_post.append(a); enc_base.append(b)
@@ -250,12 +282,14 @@ def _split_half_reliability(post, n_splits=200, seed=0):
     return float(np.tanh(np.mean(zs))) if zs else np.nan
 
 
-def _fisher_mean(vals):
+def _r_mean(vals):
+    """Mean of raw Pearson r values (Lee & Chen 2022 averaged raw r, not
+    Fisher-z)."""
     vals = np.asarray(vals, float)
     vals = vals[~np.isnan(vals)]
     if vals.size == 0:
         return np.nan
-    return float(np.tanh(np.nanmean(np.arctanh(np.clip(vals, -0.999, 0.999)))))
+    return float(np.nanmean(vals))
 
 
 # ============================================================================
@@ -341,9 +375,9 @@ def compute(subjects, tems):
     mats_post = np.stack(mats_post)
     mats_base = np.stack(mats_base)
 
-    group_post = np.array([[_fisher_mean(mats_post[:, i, j])
+    group_post = np.array([[_r_mean(mats_post[:, i, j])
                             for j in range(n)] for i in range(n)])
-    group_base = np.array([[_fisher_mean(mats_base[:, i, j])
+    group_base = np.array([[_r_mean(mats_base[:, i, j])
                             for j in range(n)] for i in range(n)])
 
     return dict(subjects=np.array(subjects),
@@ -380,11 +414,11 @@ def build_stats(res):
     # per-subject mean cross-type generalization (off-diagonal of the 4x4
     # between-event sub-block; the within-movie 5th row/col is excluded here).
     off = ~np.eye(nb, dtype=bool)
-    cross_post = [ _fisher_mean(res['mats_post'][s][:nb, :nb][off])
+    cross_post = [ _r_mean(res['mats_post'][s][:nb, :nb][off])
                    for s in range(res['mats_post'].shape[0]) ]
-    cross_base = [ _fisher_mean(res['mats_base'][s][:nb, :nb][off])
+    cross_base = [ _r_mean(res['mats_base'][s][:nb, :nb][off])
                    for s in range(res['mats_base'].shape[0]) ]
-    within_diag = [ _fisher_mean([res['within'][c][s] for c in CONDS])
+    within_diag = [ _r_mean([res['within'][c][s] for c in CONDS])
                     for s in range(len(res['subjects'])) ]
 
     S = {
