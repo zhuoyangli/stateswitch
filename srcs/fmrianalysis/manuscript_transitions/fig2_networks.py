@@ -48,6 +48,7 @@ from scipy import stats
 from configs.config import ANALYSIS_CACHE_DIR, FIGS_DIR
 from fmrianalysis.pmc_dna_dnb_boundary_corr import corr_matrix, SUBJECTS as CORR_SUBS
 import fmrianalysis.pmc_dna_dnb_boundary_timecourse as TC
+from fmrianalysis.manuscript_transitions._style import apply_zero_format
 
 
 OUTPUT_DIR = FIGS_DIR / 'manuscript_transitions'
@@ -213,6 +214,8 @@ def make_figure(za, zb, vr, vp, corrB, magC, subs):
     axC.set_title('C  DN-A > DN-B at transitions\n(relu-weighted PMC magnitude)',
                   fontsize=LABEL_FS - 1, fontweight='bold')
 
+    apply_zero_format(axA, which='x')
+    apply_zero_format(axB, axC)
     fig.suptitle('Figure 2  |  The PMC transition signature reflects DN-A '
                  '(RSC/parahippocampal) > DN-B (TPJ) engagement',
                  fontsize=LABEL_FS + 1, fontweight='bold', y=0.98)

@@ -73,6 +73,7 @@ from fmrianalysis.cross_boundary_macro_pattern_similarity_pmc import (
     _recall_runs_for_subject, FILMFEST_TASKS,
 )
 from fmrianalysis.utils import discover_svf_ahc_sessions
+from fmrianalysis.manuscript_transitions._style import apply_zero_format
 
 
 # ============================================================================
@@ -488,6 +489,7 @@ def make_figure(res, S, vmax=0.4):
     axC.set_title(f"C  dissociation: {_stars(dp['p'])}\n(paired t={dp['t']:.1f})",
                   fontsize=LABEL_FS - 1, fontweight='bold')
 
+    apply_zero_format(axB, axC)
     fig.suptitle('Figure 1  |  The PMC transition pattern generalizes across '
                  'movie, recall, word (SVF) and scenario (AHC) transitions',
                  fontsize=LABEL_FS + 1, fontweight='bold', y=0.98)

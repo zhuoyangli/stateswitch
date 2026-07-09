@@ -43,6 +43,7 @@ from scipy import stats
 
 from configs.config import FIGS_DIR, TR
 import fmrianalysis.pmc_dna_dnb_boundary_timecourse as TC
+from fmrianalysis.manuscript_transitions._style import apply_zero_format
 
 
 OUTPUT_DIR = FIGS_DIR / 'manuscript_transitions'
@@ -262,6 +263,8 @@ def make_figure(off, on):
     axP.set_title('crossover per transition type (onset-locked)',
                   fontsize=LABEL_FS - 1, fontweight='bold')
 
+    apply_zero_format(axN, axM, which='both')
+    apply_zero_format(axC, axP)
     fig.suptitle('Figure 3  |  Dynamic DN-B -> DN-A hand-off across the boundary: '
                  'DN-B leads as an event ends, DN-A leads as the next begins',
                  fontsize=LABEL_FS + 1, fontweight='bold', y=0.965)
